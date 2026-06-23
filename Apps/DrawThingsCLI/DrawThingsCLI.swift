@@ -18,6 +18,16 @@ import ScriptDataModels
 import Tokenizer
 import Trainer
 
+// Ponytail: macOS 27 beta runtime MSL compiler fails on MPP / NAX kernels. Disable
+// via ccv's C API directly. Defined as @_silgen_name to avoid importing ccv's
+// entire C header surface. Note ccv's enable/disable naming is inverted vs. the flag
+// names: CCV_NNC_DISABLE_MFA is *enabled* via ccv_nnc_enable_flag.
+@_silgen_name("ccv_nnc_enable_flag")
+private func _ccvNncEnableFlag(_ flag: UInt64)
+
+@_silgen_name("ccv_nnc_disable_flag")
+private func _ccvNncDisableFlag(_ flag: UInt64)
+
 #if canImport(Darwin)
   import Darwin
 #elseif canImport(Glibc)
@@ -1548,6 +1558,21 @@ private func createLocalImageGenerator(queue: DispatchQueue) throws -> (String, 
   let tempDir = try createTemporaryDirectory()
   let workspace = SQLiteWorkspace(
     filePath: "\(tempDir)/config.sqlite3", fileProtectionLevel: .noProtection)
+  // Ponytail: macOS 27 beta (26A5353q) runtime MSL compiler fails to resolve MPP
+  // symbols, so any MFA path that uses ccv's NAMatMulSmallMKernel crashes. Disable the
+  // NAX path via ccv's C flag API so generation falls back to non-MPP GEMM kernels.
+  // Also set mfa_guard so s4nnc's DynamicGraph disables MFA too. Override with
+  // DRAW_THINGS_FORCE_MFA=1 to re-enable. Remove once the user installs the pending
+  // macOS 27 Golden Gate Beta 2 update (build 26A5368g+).
+  if ProcessInfo.processInfo.environment["DRAW_THINGS_FORCE_MFA"] != "1" {
+    workspace.dictionary["mfa_guard", Bool.self] = true
+    workspace.dictionary.synchronize()
+    // Note: ccv_nnc_enable_flag sets a flag (including CCV_NNC_DISABLE_MFA_* bits).
+    _ccvNncEnableFlag(0x01 /* CCV_NNC_DISABLE_MFA */)
+    _ccvNncEnableFlag(0x10 /* CCV_NNC_DISABLE_MFA_GEMM */)
+    _ccvNncEnableFlag(0x40 /* CCV_NNC_DISABLE_MFA_NEURAL_ACCELERATORS */)
+    _ccvNncEnableFlag(0x80 /* CCV_NNC_DISABLE_MFA_ANE */)
+  }
   let configurations = workspace.fetch(for: GenerationConfiguration.self).where(
     GenerationConfiguration.id == 0, limit: .limit(0))
 
@@ -1754,6 +1779,13 @@ private final class LocalGenerationRunner {
     let timingTracker = GenerationTimingTracker()
     let hints = [(ControlHintType, [(AnyTensor, Float)])]()
     progressPrinter.update(progress: 0, label: "Starting...", detail: nil)
+    // Ponytail: re-apply just before generation in case anything reset ccv's flags.
+    if ProcessInfo.processInfo.environment["DRAW_THINGS_FORCE_MFA"] != "1" {
+      _ccvNncEnableFlag(0x01)
+      _ccvNncEnableFlag(0x10)
+      _ccvNncEnableFlag(0x40)
+      _ccvNncEnableFlag(0x80)
+    }
     let (images, audio, _) = queue.sync {
       imageGenerator.generate(
         trace: trace, image: inputImage, scaleFactor: 1, mask: nil, hints: hints, text: prompt,
