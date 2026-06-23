@@ -1,5 +1,12 @@
 # Session Learnings
 
+## Downloader Naming + Compatibility Policy
+- In this repo, prefer one canonical name for a behavior or mode instead of compatibility aliases.
+- For the downloader split, use `SegmentedResumableDownloaderBackend` vs `URLSessionDownloadTaskResumableDownloaderBackend`.
+- For `ResumableDownloader`, select backend via an explicit constructor parameter with a default instead of process-global environment variables.
+- Do not keep compatibility flags or alternate spellings such as `legacy` when renaming internal APIs or test harness flags unless persisted data or an external contract requires it.
+- If compatibility is required, constrain it to persisted data / externally consumed formats rather than duplicating internal source-of-truth names in code paths.
+
 ## FrameCompression (VideoToolbox + s4nnc)
 - Prefer a synchronous public API for single-frame artifact injection:
   - `FrameCompression.applyCompressionArtifacts(to:codec:quality:) throws -> Tensor<FloatType>`
@@ -51,6 +58,12 @@
 - If an operation is inherently callback-driven and cannot be made truly synchronous with native APIs, expose an async completion-handler API directly.
 - Do not introduce `DispatchQueue`, `DispatchGroup`, or `DispatchSemaphore` in utility functions to simulate sync/async behavior unless absolutely necessary.
 - Keep utility functions thread-agnostic and leave threading/queue decisions to upper-level call sites.
+
+## Inline Logic vs Helpers
+- Prefer in-place logic for small, local behavior changes, especially in UI workflows and short persistence paths.
+- Do not introduce one-off private helpers for a few lines of straightforward code unless the logic is reused or the extracted name captures a real domain concept.
+- Good helper candidates are shared policy, non-trivial data transformation, or logic reused across multiple call sites.
+- Poor helper candidates are short project-dictionary reads/writes, one-off alert assembly, or tiny control-flow wrappers added during opportunistic cleanup.
 
 ## Swift Error Style
 - Do not introduce new `NSError` values in Swift-first code paths.

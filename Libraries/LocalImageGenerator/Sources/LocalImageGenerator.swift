@@ -161,8 +161,9 @@ extension LocalImageGenerator {
         700.00, 54.5, 15.886, 7.977, 4.248, 1.789, 0.981, 0.403, 0.173, 0.034, 0.002,
       ]
     case .sd3, .sd3Large, .pixart, .auraflow, .flux1, .kandinsky21, .wurstchenStageB,
-      .wurstchenStageC, .hunyuanVideo, .wan21_1_3b, .wan21_14b, .hiDreamI1, .qwenImage, .wan22_5b,
-      .zImage, .ernieImage, .flux2, .flux2_9b, .flux2_4b, .cosmos2_5_2b, .ltx2, .ltx2_3:
+      .wurstchenStageC, .hunyuanVideo, .wan21_1_3b, .wan21_14b, .hiDreamI1, .hiDreamO1,
+      .qwenImage, .wan22_5b, .zImage, .ernieImage, .flux2, .flux2_9b, .flux2_4b, .cosmos2_5_2b,
+      .ltx2, .ltx2_3, .seedvr2_3b, .seedvr2_7b, .ideogram4:
       samplingTimesteps = []
       samplingSigmas = []
     }
@@ -1481,6 +1482,11 @@ extension LocalImageGenerator {
         graph: graph, tokenizer: tokenizerV2, text: text, negativeText: negativeText,
         paddingToken: 0, addSpecialTokens: true, conditionalLength: 1024, modifier: .clipL,
         potentials: potentials)
+    case .seedvr2_3b, .seedvr2_7b:
+      return tokenize(
+        graph: graph, tokenizer: tokenizerV1, text: text, negativeText: negativeText,
+        paddingToken: nil, addSpecialTokens: true, conditionalLength: 768, modifier: .clipL,
+        potentials: potentials)
     case .kandinsky21:
       let (tokenTensors, positionTensors, lengthsOfUncond, lengthsOfCond) = kandinskyTokenize(
         graph: graph, text: text, negativeText: negativeText,
@@ -1576,6 +1582,17 @@ extension LocalImageGenerator {
         paddingToken: nil, addSpecialTokens: false, conditionalLength: 2560, modifier: .qwen3,
         potentials: potentials, startLength: 0, endLength: 0, maxLength: 0, paddingLength: 0)
       return result
+    case .hiDreamO1:
+      let promptWithTemplate =
+        "<|im_start|>user\n\(text)<|im_end|>\n<|im_start|>assistant\n<|boi_token|>"
+      let negativePromptWithTemplate =
+        "<|im_start|>user\n\(negativeText)<|im_end|>\n<|im_start|>assistant\n<|boi_token|>"
+      return tokenize(
+        graph: graph, tokenizer: tokenizerQwen3, text: promptWithTemplate,
+        negativeText: negativePromptWithTemplate,
+        paddingToken: nil, addSpecialTokens: false, conditionalLength: 4096, modifier: .qwen3,
+        potentials: potentials, startLength: 0, endLength: 0,
+        maxLength: paddedTextEncodingLength, paddingLength: paddedTextEncodingLength)
     case .ernieImage:
       return tokenize(
         graph: graph, tokenizer: tokenizerMistral3, text: text, negativeText: negativeText,
@@ -1605,6 +1622,17 @@ extension LocalImageGenerator {
         potentials: potentials, startLength: 0, endLength: 0, maxLength: paddedTextEncodingLength,
         paddingLength: paddedTextEncodingLength)
       return result
+    case .ideogram4:
+      let promptWithTemplate =
+        "<|im_start|>user\n\(text)<|im_end|>\n<|im_start|>assistant\n"
+      let negativePromptWithTemplate =
+        "<|im_start|>user\n\(negativeText)<|im_end|>\n<|im_start|>assistant\n"
+      return tokenize(
+        graph: graph, tokenizer: tokenizerQwen3, text: promptWithTemplate,
+        negativeText: negativePromptWithTemplate,
+        paddingToken: nil, addSpecialTokens: false, conditionalLength: 4096, modifier: .qwen3,
+        potentials: potentials, startLength: 0, endLength: 0, maxLength: paddedTextEncodingLength,
+        paddingLength: paddedTextEncodingLength)
     case .cosmos2_5_2b:
       var result = tokenize(
         graph: graph, tokenizer: tokenizerQwen3, text: text,
@@ -2129,9 +2157,9 @@ extension LocalImageGenerator {
 
   private func randomLatentNoise(
     graph: DynamicGraph, batchSize: Int, startHeight: Int, startWidth: Int, channels: Int,
-    seed: UInt32, seedMode: SeedMode
+    seed: UInt32, seedMode: SeedMode, noiseScalingFactor: Float = 1
   ) -> DynamicGraph.Tensor<FloatType> {
-    let x_T: DynamicGraph.Tensor<FloatType>
+    var x_T: DynamicGraph.Tensor<FloatType>
     switch seedMode {
     case .legacy:
       x_T = graph.variable(
@@ -2177,6 +2205,9 @@ extension LocalImageGenerator {
             0, 2, 3, 1
           ).copied())
       x_T = graph.variable(noiseTensor.toGPU(0))
+    }
+    if noiseScalingFactor != 1 {
+      x_T = Float(noiseScalingFactor) * x_T
     }
     return x_T
   }
@@ -3123,7 +3154,7 @@ extension LocalImageGenerator {
           }
           return c
         }
-      case .hiDreamI1:
+      case .hiDreamI1, .hiDreamO1:
         // While HiDream uses CLIP, these are not meaningful because it only uses the pooling vector from CLIP.
         break
       case .wan21_1_3b, .wan21_14b, .wan22_5b:
@@ -3136,7 +3167,8 @@ extension LocalImageGenerator {
         fatalError()
       case .ltx2, .ltx2_3:
         fatalError()
-      case .auraflow, .flux1, .kandinsky21, .pixart, .hunyuanVideo:
+      case .auraflow, .flux1, .kandinsky21, .pixart, .hunyuanVideo, .seedvr2_3b, .seedvr2_7b,
+        .ideogram4:
         break
       }
     }
@@ -3211,7 +3243,7 @@ extension LocalImageGenerator {
       else { return (nil, []) }
       switch version {
       case .v1, .v2, .auraflow, .kandinsky21, .pixart, .sd3, .sd3Large, .sdxlBase, .sdxlRefiner,
-        .ssd1b, .svdI2v, .wurstchenStageB, .wurstchenStageC:
+        .ssd1b, .svdI2v, .wurstchenStageB, .wurstchenStageC, .seedvr2_3b, .seedvr2_7b:
         return (Functional.averagePool(depth, filterSize: [8, 8], hint: Hint(stride: [8, 8])), [])
       case .flux1:
         let graph = depth.graph
@@ -3227,7 +3259,7 @@ extension LocalImageGenerator {
           firstStage.scale(
             encodedDepth[0..<1, 0..<encodedShape[1], 0..<encodedShape[2], 0..<16].copied()), []
         )
-      case .hiDreamI1:
+      case .hiDreamI1, .hiDreamO1:
         fatalError()
       case .zImage, .ernieImage:
         fatalError()
@@ -3237,7 +3269,7 @@ extension LocalImageGenerator {
         fatalError()
       case .ltx2, .ltx2_3:
         fatalError()
-      case .qwenImage, .cosmos2_5_2b:
+      case .qwenImage, .cosmos2_5_2b, .ideogram4:
         fatalError()
       case .hunyuanVideo:
         fatalError()
@@ -3246,8 +3278,8 @@ extension LocalImageGenerator {
       switch version {
       case .v1, .v2, .auraflow, .kandinsky21, .pixart, .sd3, .sd3Large, .sdxlBase, .sdxlRefiner,
         .ssd1b, .svdI2v, .wurstchenStageB, .wurstchenStageC, .hunyuanVideo, .wan21_1_3b, .wan21_14b,
-        .hiDreamI1, .qwenImage, .cosmos2_5_2b, .wan22_5b, .zImage, .ernieImage, .flux2,
-        .flux2_9b, .flux2_4b, .ltx2, .ltx2_3:
+        .hiDreamI1, .hiDreamO1, .qwenImage, .cosmos2_5_2b, .wan22_5b, .zImage, .ernieImage, .flux2,
+        .flux2_9b, .flux2_4b, .ltx2, .ltx2_3, .seedvr2_3b, .seedvr2_7b, .ideogram4:
         return (nil, [])
       case .flux1:
         guard
@@ -3271,7 +3303,8 @@ extension LocalImageGenerator {
       switch version {
       case .v1, .v2, .auraflow, .kandinsky21, .pixart, .sd3, .sd3Large, .sdxlBase, .sdxlRefiner,
         .ssd1b, .svdI2v, .wurstchenStageB, .wurstchenStageC, .hunyuanVideo, .wan21_1_3b, .wan21_14b,
-        .hiDreamI1, .wan22_5b, .zImage, .ernieImage, .cosmos2_5_2b:
+        .hiDreamI1, .hiDreamO1, .wan22_5b, .zImage, .ernieImage, .cosmos2_5_2b, .seedvr2_3b,
+        .seedvr2_7b, .ideogram4:
         return (nil, [])
       case .ltx2, .ltx2_3:
         guard let image = image else { return (nil, []) }
@@ -3341,8 +3374,9 @@ extension LocalImageGenerator {
       switch version {
       case .v1, .v2, .auraflow, .kandinsky21, .pixart, .sd3, .sd3Large, .sdxlBase, .sdxlRefiner,
         .ssd1b, .svdI2v, .wurstchenStageB, .wurstchenStageC, .hunyuanVideo, .wan21_1_3b, .wan21_14b,
-        .hiDreamI1, .wan22_5b, .zImage, .ernieImage, .flux1, .qwenImage, .cosmos2_5_2b, .flux2,
-        .flux2_9b, .flux2_4b:
+        .hiDreamI1, .hiDreamO1, .wan22_5b, .zImage, .ernieImage, .flux1, .qwenImage, .cosmos2_5_2b,
+        .flux2,
+        .flux2_9b, .flux2_4b, .seedvr2_3b, .seedvr2_7b, .ideogram4:
         return x
       case .ltx2, .ltx2_3:
         guard let firstFrame = imageCond.1.first else { return x }
@@ -3360,8 +3394,9 @@ extension LocalImageGenerator {
   private func isI2v(version: ModelVersion, modifier: SamplerModifier) -> Bool {
     switch version {
     case .v1, .v2, .auraflow, .kandinsky21, .pixart, .sd3, .sd3Large, .sdxlBase, .sdxlRefiner,
-      .ssd1b, .wurstchenStageB, .wurstchenStageC, .flux1, .hiDreamI1, .qwenImage,
-      .cosmos2_5_2b, .wan22_5b, .zImage, .ernieImage, .flux2, .flux2_9b, .flux2_4b:
+      .ssd1b, .wurstchenStageB, .wurstchenStageC, .flux1, .hiDreamI1, .hiDreamO1, .qwenImage,
+      .cosmos2_5_2b, .wan22_5b, .zImage, .ernieImage, .flux2, .flux2_9b, .flux2_4b, .seedvr2_3b,
+      .seedvr2_7b, .ideogram4:
       return false
     case .svdI2v:
       return true
@@ -3377,7 +3412,9 @@ extension LocalImageGenerator {
     switch version {
     case .v1, .v2, .auraflow, .kandinsky21, .pixart, .sd3, .sd3Large, .sdxlBase, .sdxlRefiner,
       .ssd1b, .svdI2v, .wurstchenStageB, .wurstchenStageC, .hunyuanVideo, .flux1, .hiDreamI1,
-      .qwenImage, .cosmos2_5_2b, .wan22_5b, .zImage, .ernieImage, .flux2, .flux2_9b, .flux2_4b:
+      .hiDreamO1, .qwenImage, .cosmos2_5_2b, .wan22_5b, .zImage, .ernieImage, .flux2, .flux2_9b,
+      .flux2_4b,
+      .seedvr2_3b, .seedvr2_7b, .ideogram4:
       return (1, image, nil)
     case .ltx2, .ltx2_3:
       guard forSample else {
@@ -3475,10 +3512,12 @@ extension LocalImageGenerator {
       return (
         batchSize + referenceFrames, referenceFrames
       )
-    case .hunyuanVideo, .auraflow, .flux1, .hiDreamI1, .qwenImage, .cosmos2_5_2b, .kandinsky21,
+    case .hunyuanVideo, .auraflow, .flux1, .hiDreamI1, .hiDreamO1, .qwenImage, .cosmos2_5_2b,
+      .kandinsky21,
       .pixart, .sd3, .sd3Large, .sdxlBase, .sdxlRefiner, .ssd1b, .svdI2v, .v1, .v2,
       .wurstchenStageB,
-      .wurstchenStageC, .zImage, .ernieImage, .flux2, .flux2_9b, .flux2_4b, .ltx2, .ltx2_3:
+      .wurstchenStageC, .zImage, .ernieImage, .flux2, .flux2_9b, .flux2_4b, .ltx2, .ltx2_3,
+      .seedvr2_3b, .seedvr2_7b, .ideogram4:
       return (batchSize, 0)
     }
   }
@@ -3490,6 +3529,16 @@ extension LocalImageGenerator {
   ) -> DynamicGraph.Tensor<FloatType> {
     let graph = encodedImage.graph
     switch version {
+    case .seedvr2_3b, .seedvr2_7b:
+      let shape = encodedImage.shape
+      // SeedVR2's validated upscaling path appends an all-one mask channel after the condition latent.
+      // The sampler-space edit / inpaint mask remains separate from this model input channel.
+      var result = graph.variable(
+        encodedImage.kind, format: encodedImage.format,
+        shape: [shape[0], shape[1], shape[2], shape[3] + 1], of: FloatType.self)
+      result[0..<shape[0], 0..<shape[1], 0..<shape[2], 0..<shape[3]] = encodedImage
+      result[0..<shape[0], 0..<shape[1], 0..<shape[2], shape[3]..<(shape[3] + 1)].full(1)
+      return result
     case .v1, .v2, .auraflow, .kandinsky21, .pixart, .sd3, .sd3Large, .sdxlBase, .sdxlRefiner,
       .ssd1b, .svdI2v, .wurstchenStageB, .wurstchenStageC:
       let shape = encodedImage.shape
@@ -3524,11 +3573,11 @@ extension LocalImageGenerator {
         result[0..<firstFrames, 0..<shape[1], 0..<shape[2], 0..<4].full(1)
       }
       return result
-    case .hiDreamI1:
+    case .hiDreamI1, .hiDreamO1:
       fatalError()
     case .qwenImage, .cosmos2_5_2b:
       fatalError()
-    case .zImage, .ernieImage:
+    case .zImage, .ernieImage, .ideogram4:
       fatalError()
     case .flux1:
       let shape = encodedImage.shape
@@ -3619,6 +3668,7 @@ extension LocalImageGenerator {
       ModelZoo.guidanceEmbedForModel(file) && configuration.speedUpWithGuidanceEmbed
     var isCfgEnabled = !ModelZoo.isConsistencyModelForModel(file) && !isGuidanceEmbedEnabled
     let latentsScaling = ModelZoo.latentsScalingForModel(file)
+    let noiseScalingFactor = ModelZoo.noiseScalingFactorForModel(file)
     let paddedTextEncodingLength = ModelZoo.paddedTextEncodingLengthForModel(file)
     let conditioning = ModelZoo.conditioningForModel(file)
     let refinerVersion: ModelVersion? = configuration.refinerModel.flatMap {
@@ -3768,7 +3818,9 @@ extension LocalImageGenerator {
         widthScale: configuration.startWidth, heightScale: configuration.startHeight),
       variant: .diffusionMapping, injectedControls: 0)
     let batchSize =
-      ImageGeneratorUtils.isVideoModel(modelVersion) ? 1 : Int(configuration.batchSize)
+      ImageGeneratorUtils.isVideoModel(modelVersion) || modelVersion == .seedvr2_3b
+        || modelVersion == .seedvr2_7b
+      ? 1 : Int(configuration.batchSize)
     precondition(batchSize > 0)
     let textGuidanceScale = configuration.guidanceScale
     let imageGuidanceScale = configuration.imageGuidanceScale
@@ -3888,8 +3940,19 @@ extension LocalImageGenerator {
       firstPassAudioHeight = 0
     } else {
       switch modelVersion {
+      case .hiDreamO1:
+        firstPassChannels = 3 * 32 * 32
+        firstPassScaleFactor = 32
+        firstPassStartWidth =
+          (hiresFixEnabled ? Int(configuration.hiresFixStartWidth) : Int(configuration.startWidth))
+          * 2
+        firstPassStartHeight =
+          (hiresFixEnabled
+            ? Int(configuration.hiresFixStartHeight) : Int(configuration.startHeight))
+          * 2
+        firstPassAudioHeight = 0
       case .wurstchenStageC, .sd3, .sd3Large, .flux1, .hunyuanVideo, .wan21_1_3b, .wan21_14b,
-        .hiDreamI1, .qwenImage, .cosmos2_5_2b, .zImage:
+        .hiDreamI1, .qwenImage, .cosmos2_5_2b, .zImage, .seedvr2_3b, .seedvr2_7b:
         firstPassChannels = 16
         firstPassScaleFactor = 8
         firstPassStartWidth =
@@ -3900,7 +3963,7 @@ extension LocalImageGenerator {
             ? Int(configuration.hiresFixStartHeight) : Int(configuration.startHeight))
           * 8
         firstPassAudioHeight = 0
-      case .ernieImage, .flux2, .flux2_9b, .flux2_4b:
+      case .ernieImage, .flux2, .flux2_9b, .flux2_4b, .ideogram4:
         firstPassChannels = 32
         firstPassScaleFactor = 8
         firstPassStartWidth =
@@ -4140,8 +4203,9 @@ extension LocalImageGenerator {
           canInjectControls: canInjectControls, shuffleCount: shuffles.count,
           hasCustom: custom != nil)
       case .auraflow, .flux1, .kandinsky21, .pixart, .sd3, .sd3Large, .sdxlBase, .sdxlRefiner,
-        .ssd1b, .v1, .v2, .wurstchenStageB, .wurstchenStageC, .hiDreamI1, .qwenImage,
-        .cosmos2_5_2b, .zImage, .ernieImage, .flux2, .flux2_9b, .flux2_4b:
+        .ssd1b, .v1, .v2, .wurstchenStageB, .wurstchenStageC, .hiDreamI1, .hiDreamO1, .qwenImage,
+        .cosmos2_5_2b, .zImage, .ernieImage, .flux2, .flux2_9b, .flux2_4b, .seedvr2_3b,
+        .seedvr2_7b, .ideogram4:
         break
       }
       if modifier == .inpainting || modifier == .editing || modifier == .double {
@@ -4208,7 +4272,7 @@ extension LocalImageGenerator {
         graph: graph, batchSize: batchSize.0,
         startHeight: firstPassStartHeight + firstPassAudioHeight,
         startWidth: firstPassStartWidth, channels: firstPassChannels, seed: configuration.seed,
-        seedMode: configuration.seedMode)
+        seedMode: configuration.seedMode, noiseScalingFactor: noiseScalingFactor)
       let depthImage = depth.map { graph.variable($0.toGPU(0)) }
       let firstPassDepthImage = depthImage.map {
         let depthHeight = $0.shape[1]
@@ -4642,9 +4706,11 @@ extension LocalImageGenerator {
         let channels: Int
         switch modelVersion {
         case .wurstchenStageC, .sd3, .sd3Large, .flux1, .hunyuanVideo, .wan21_1_3b, .wan21_14b,
-          .hiDreamI1, .qwenImage, .cosmos2_5_2b, .zImage:
+          .hiDreamI1, .qwenImage, .cosmos2_5_2b, .zImage, .seedvr2_3b, .seedvr2_7b:
           channels = 16
-        case .ernieImage, .flux2, .flux2_9b, .flux2_4b:
+        case .hiDreamO1:
+          channels = 3 * 32 * 32
+        case .ernieImage, .flux2, .flux2_9b, .flux2_4b, .ideogram4:
           channels = 32
         case .wan22_5b:
           channels = 48
@@ -5106,7 +5172,10 @@ extension LocalImageGenerator {
       tiledDiffusion: tiledDiffusion, teaCache: teaCache, causalInference: causalInference,
       cfgZeroStar: cfgZeroStar, isBF16: isBF16, weightsCache: weightsCache, of: FloatType.self)
     let initTimestep = sampler.timestep(for: strength, sampling: sampling)
-    guard initTimestep.startStep > 0 || modelVersion == .svdI2v else {  // TODO: This check should be removed as text only should be capable of handling svdI2v too.
+    guard
+      initTimestep.startStep > 0 || modelVersion == .svdI2v || modelVersion == .seedvr2_3b
+        || modelVersion == .seedvr2_7b
+    else {  // TODO: This check should be removed as text only should be capable of handling svdI2v too.
       return generateTextOnly(
         image, scaleFactor: imageScaleFactor,
         depth: depth, hints: hints, custom: custom, shuffles: shuffles, poses: poses,
@@ -5115,7 +5184,9 @@ extension LocalImageGenerator {
         cancellation: cancellation, feedback: feedback)
     }
     let batchSize =
-      ImageGeneratorUtils.isVideoModel(modelVersion) ? 1 : Int(configuration.batchSize)
+      ImageGeneratorUtils.isVideoModel(modelVersion) || modelVersion == .seedvr2_3b
+        || modelVersion == .seedvr2_7b
+      ? 1 : Int(configuration.batchSize)
     precondition(batchSize > 0)
     precondition(strength >= 0 && strength <= 1)
     let highPrecisionForAutoencoder = ModelZoo.isHighPrecisionAutoencoderForModel(file)
@@ -5135,14 +5206,20 @@ extension LocalImageGenerator {
       audioHeight = 0
     } else {
       switch modelVersion {
+      case .hiDreamO1:
+        channels = 3 * 32 * 32
+        startScaleFactor = 32
+        startWidth = image.shape[2] / 32 / imageScaleFactor
+        startHeight = image.shape[1] / 32 / imageScaleFactor
+        audioHeight = 0
       case .wurstchenStageC, .sd3, .sd3Large, .flux1, .hunyuanVideo, .wan21_1_3b, .wan21_14b,
-        .hiDreamI1, .qwenImage, .cosmos2_5_2b, .zImage:
+        .hiDreamI1, .qwenImage, .cosmos2_5_2b, .zImage, .seedvr2_3b, .seedvr2_7b:
         channels = 16
         startScaleFactor = 8
         startWidth = image.shape[2] / 8 / imageScaleFactor
         startHeight = image.shape[1] / 8 / imageScaleFactor
         audioHeight = 0
-      case .ernieImage, .flux2, .flux2_9b, .flux2_4b:
+      case .ernieImage, .flux2, .flux2_9b, .flux2_4b, .ideogram4:
         channels = 32
         startScaleFactor = 8
         startWidth = image.shape[2] / 8 / imageScaleFactor
@@ -5360,8 +5437,9 @@ extension LocalImageGenerator {
           canInjectControls: canInjectControls, shuffleCount: shuffles.count,
           hasCustom: custom != nil)
       case .auraflow, .flux1, .kandinsky21, .pixart, .sd3, .sd3Large, .sdxlBase, .sdxlRefiner,
-        .ssd1b, .v1, .v2, .wurstchenStageB, .wurstchenStageC, .hiDreamI1, .qwenImage,
-        .cosmos2_5_2b, .zImage, .ernieImage, .flux2, .flux2_9b, .flux2_4b:
+        .ssd1b, .v1, .v2, .wurstchenStageB, .wurstchenStageC, .hiDreamI1, .hiDreamO1, .qwenImage,
+        .cosmos2_5_2b, .zImage, .ernieImage, .flux2, .flux2_9b, .flux2_4b, .seedvr2_3b,
+        .seedvr2_7b, .ideogram4:
         break
       }
       let imageSize: Int
@@ -6416,7 +6494,9 @@ extension LocalImageGenerator {
       }
     }
     let batchSize =
-      ImageGeneratorUtils.isVideoModel(modelVersion) ? 1 : Int(configuration.batchSize)
+      ImageGeneratorUtils.isVideoModel(modelVersion) || modelVersion == .seedvr2_3b
+        || modelVersion == .seedvr2_7b
+      ? 1 : Int(configuration.batchSize)
     precondition(batchSize > 0)
     let textGuidanceScale = configuration.guidanceScale
     let imageGuidanceScale = configuration.imageGuidanceScale
@@ -6462,14 +6542,20 @@ extension LocalImageGenerator {
       audioHeight = 0
     } else {
       switch modelVersion {
+      case .hiDreamO1:
+        channels = 3 * 32 * 32
+        startScaleFactor = 32
+        startWidth = image.shape[2] / 32 / imageScaleFactor
+        startHeight = image.shape[1] / 32 / imageScaleFactor
+        audioHeight = 0
       case .wurstchenStageC, .sd3, .sd3Large, .flux1, .hunyuanVideo, .wan21_1_3b, .wan21_14b,
-        .hiDreamI1, .qwenImage, .cosmos2_5_2b, .zImage:
+        .hiDreamI1, .qwenImage, .cosmos2_5_2b, .zImage, .seedvr2_3b, .seedvr2_7b:
         channels = 16
         startScaleFactor = 8
         startWidth = image.shape[2] / 8 / imageScaleFactor
         startHeight = image.shape[1] / 8 / imageScaleFactor
         audioHeight = 0
-      case .ernieImage, .flux2, .flux2_9b, .flux2_4b:
+      case .ernieImage, .flux2, .flux2_9b, .flux2_4b, .ideogram4:
         channels = 32
         startScaleFactor = 8
         startWidth = image.shape[2] / 8 / imageScaleFactor
@@ -6764,8 +6850,9 @@ extension LocalImageGenerator {
           canInjectControls: canInjectControls, shuffleCount: shuffles.count,
           hasCustom: custom != nil)
       case .auraflow, .flux1, .kandinsky21, .pixart, .sd3, .sd3Large, .sdxlBase, .sdxlRefiner,
-        .ssd1b, .v1, .v2, .wurstchenStageB, .wurstchenStageC, .hiDreamI1, .qwenImage,
-        .cosmos2_5_2b, .zImage, .ernieImage, .flux2, .flux2_9b, .flux2_4b:
+        .ssd1b, .v1, .v2, .wurstchenStageB, .wurstchenStageC, .hiDreamI1, .hiDreamO1, .qwenImage,
+        .cosmos2_5_2b, .zImage, .ernieImage, .flux2, .flux2_9b, .flux2_4b, .seedvr2_3b,
+        .seedvr2_7b, .ideogram4:
         break
       }
       let imageSize: Int
@@ -7313,7 +7400,9 @@ extension LocalImageGenerator {
       }
     }
     let batchSize =
-      ImageGeneratorUtils.isVideoModel(modelVersion) ? 1 : Int(configuration.batchSize)
+      ImageGeneratorUtils.isVideoModel(modelVersion) || modelVersion == .seedvr2_3b
+        || modelVersion == .seedvr2_7b
+      ? 1 : Int(configuration.batchSize)
     precondition(batchSize > 0)
     let textGuidanceScale = configuration.guidanceScale
     let imageGuidanceScale = configuration.imageGuidanceScale
@@ -7359,14 +7448,20 @@ extension LocalImageGenerator {
       audioHeight = 0
     } else {
       switch modelVersion {
+      case .hiDreamO1:
+        channels = 3 * 32 * 32
+        startScaleFactor = 32
+        startWidth = image.shape[2] / 32 / imageScaleFactor
+        startHeight = image.shape[1] / 32 / imageScaleFactor
+        audioHeight = 0
       case .wurstchenStageC, .sd3, .sd3Large, .flux1, .hunyuanVideo, .wan21_1_3b, .wan21_14b,
-        .hiDreamI1, .qwenImage, .cosmos2_5_2b, .zImage:
+        .hiDreamI1, .qwenImage, .cosmos2_5_2b, .zImage, .seedvr2_3b, .seedvr2_7b:
         channels = 16
         startScaleFactor = 8
         startWidth = image.shape[2] / 8 / imageScaleFactor
         startHeight = image.shape[1] / 8 / imageScaleFactor
         audioHeight = 0
-      case .ernieImage, .flux2, .flux2_9b, .flux2_4b:
+      case .ernieImage, .flux2, .flux2_9b, .flux2_4b, .ideogram4:
         channels = 32
         startScaleFactor = 8
         startWidth = image.shape[2] / 8 / imageScaleFactor
@@ -7660,8 +7755,9 @@ extension LocalImageGenerator {
           canInjectControls: canInjectControls, shuffleCount: shuffles.count,
           hasCustom: custom != nil)
       case .auraflow, .flux1, .kandinsky21, .pixart, .sd3, .sd3Large, .sdxlBase, .sdxlRefiner,
-        .ssd1b, .v1, .v2, .wurstchenStageB, .wurstchenStageC, .hiDreamI1, .qwenImage,
-        .cosmos2_5_2b, .zImage, .ernieImage, .flux2, .flux2_9b, .flux2_4b:
+        .ssd1b, .v1, .v2, .wurstchenStageB, .wurstchenStageC, .hiDreamI1, .hiDreamO1, .qwenImage,
+        .cosmos2_5_2b, .zImage, .ernieImage, .flux2, .flux2_9b, .flux2_4b, .seedvr2_3b,
+        .seedvr2_7b, .ideogram4:
         break
       }
       let imageSize: Int

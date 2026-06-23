@@ -142,7 +142,7 @@ struct Converter: ParsableCommand {
           autoencoder = "wan_v2.1_video_vae_f16.ckpt"
         }
       }
-    case .hiDreamI1:
+    case .hiDreamI1, .hiDreamO1:
       fatalError()
     case .qwenImage:
       fatalError()
@@ -161,6 +161,20 @@ struct Converter: ParsableCommand {
         } ?? "ministral_3_3b_f16.ckpt"
       if autoencoder == nil {
         autoencoder = "flux_2_vae_f16.ckpt"
+      }
+    case .ideogram4:
+      textEncoder =
+        fileNames.first {
+          $0.hasSuffix("_qwen_3_vl_8b_instruct_f16.ckpt")
+            || $0.hasSuffix("_qwen_3_vl_8b_instruct_q8p.ckpt")
+        } ?? "qwen_3_vl_8b_instruct_q8p.ckpt"
+      if autoencoder == nil {
+        autoencoder = "flux_2_vae_f16.ckpt"
+      }
+    case .seedvr2_3b, .seedvr2_7b:
+      textEncoder = "\(fileName)_f16.ckpt"
+      if autoencoder == nil {
+        autoencoder = "seedvr2_vae_f16.ckpt"
       }
     case .flux2, .flux2_9b, .flux2_4b:
       fatalError()

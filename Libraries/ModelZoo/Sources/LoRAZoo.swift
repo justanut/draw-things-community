@@ -415,6 +415,8 @@ public struct LoRAZoo: DownloadZoo {
       return " (Wan v2.x 14B)"
     case .hiDreamI1:
       return " (HiDream I1)"
+    case .hiDreamO1:
+      return " (HiDream O1)"
     case .qwenImage:
       return " (Qwen Image)"
     case .wan22_5b:
@@ -435,6 +437,10 @@ public struct LoRAZoo: DownloadZoo {
       return " (LTX-2)"
     case .ltx2_3:
       return " (LTX-2.3)"
+    case .seedvr2_3b, .seedvr2_7b:
+      return " (SeedVR2)"
+    case .ideogram4:
+      return " (Ideogram 4)"
     }
   }
 

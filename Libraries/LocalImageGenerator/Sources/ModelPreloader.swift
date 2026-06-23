@@ -527,6 +527,13 @@ extension ModelPreloader {
       return
     }
     preloadState = .preloadStart(useCoreML ? 80 : 2, useCoreML, modelFile, lora)
+    // SeedVR2 needs checkpoint-provided text embeddings and rotary side inputs, so the generic
+    // SD-style preloader cannot synthesize a representative graph yet.
+    if modelVersion == .hiDreamO1 || modelVersion == .seedvr2_3b || modelVersion == .seedvr2_7b
+      || modelVersion == .ideogram4
+    {
+      return
+    }
     let conditionalLength: Int
     switch modelVersion {
     case .v1:
@@ -536,9 +543,9 @@ extension ModelPreloader {
     case .sdxlBase, .sdxlRefiner, .ssd1b:
       conditionalLength = 1280
     case .sd3, .sd3Large, .pixart, .auraflow, .flux1, .kandinsky21, .svdI2v, .wurstchenStageC,
-      .wurstchenStageB, .hunyuanVideo, .wan21_1_3b, .wan21_14b, .hiDreamI1, .qwenImage,
+      .wurstchenStageB, .hunyuanVideo, .wan21_1_3b, .wan21_14b, .hiDreamI1, .hiDreamO1, .qwenImage,
       .cosmos2_5_2b, .wan22_5b, .zImage, .ernieImage, .flux2, .flux2_9b, .flux2_4b, .ltx2,
-      .ltx2_3:
+      .ltx2_3, .seedvr2_3b, .seedvr2_7b, .ideogram4:
       fatalError()
     }
     let cfgChannels: Int
@@ -760,9 +767,10 @@ extension ModelPreloader {
             ).0
           textModelLoRAPrefix = "__te2"
         case .sd3, .sd3Large, .pixart, .auraflow, .flux1, .kandinsky21, .svdI2v, .wurstchenStageC,
-          .wurstchenStageB, .hunyuanVideo, .wan21_1_3b, .wan21_14b, .hiDreamI1, .qwenImage,
+          .wurstchenStageB, .hunyuanVideo, .wan21_1_3b, .wan21_14b, .hiDreamI1, .hiDreamO1,
+          .qwenImage,
           .cosmos2_5_2b, .wan22_5b, .zImage, .ernieImage, .flux2, .flux2_9b, .flux2_4b, .ltx2,
-          .ltx2_3:
+          .ltx2_3, .seedvr2_3b, .seedvr2_7b, .ideogram4:
           fatalError()
         }
         let tokensTensor = graph.variable(.GPU(0), .C(2 * 77), of: Int32.self)
@@ -801,8 +809,9 @@ extension ModelPreloader {
                     }
                   case .sd3, .sd3Large, .pixart, .auraflow, .flux1, .kandinsky21, .svdI2v,
                     .wurstchenStageC, .wurstchenStageB, .hunyuanVideo, .wan21_1_3b, .wan21_14b,
-                    .hiDreamI1, .qwenImage, .cosmos2_5_2b, .wan22_5b, .zImage, .ernieImage,
-                    .flux2, .flux2_9b, .flux2_4b, .ltx2, .ltx2_3:
+                    .hiDreamI1, .hiDreamO1, .qwenImage, .cosmos2_5_2b, .wan22_5b, .zImage,
+                    .ernieImage, .flux2, .flux2_9b, .flux2_4b, .ltx2, .ltx2_3, .seedvr2_3b,
+                    .seedvr2_7b, .ideogram4:
                     fatalError()
                   }
                   return loader.mergeLoRA(
@@ -845,8 +854,9 @@ extension ModelPreloader {
                   }
                 case .sd3, .sd3Large, .pixart, .auraflow, .flux1, .kandinsky21, .svdI2v,
                   .wurstchenStageC, .wurstchenStageB, .hunyuanVideo, .wan21_1_3b, .wan21_14b,
-                  .hiDreamI1, .qwenImage, .cosmos2_5_2b, .wan22_5b, .zImage, .ernieImage, .flux2,
-                  .flux2_9b, .flux2_4b, .ltx2, .ltx2_3:
+                  .hiDreamI1, .hiDreamO1, .qwenImage, .cosmos2_5_2b, .wan22_5b, .zImage,
+                  .ernieImage, .flux2, .flux2_9b, .flux2_4b, .ltx2, .ltx2_3, .seedvr2_3b,
+                  .seedvr2_7b, .ideogram4:
                   fatalError()
                 }
                 return .continue(name)
@@ -1146,12 +1156,12 @@ extension ModelPreloader {
             is8BitModel: is8BitModel)
         case .textEncoder:
           switch version {
-          case .v1, .v2, .kandinsky21:
+          case .v1, .v2, .kandinsky21, .hiDreamO1:
             return false
           case .sd3, .sd3Large, .pixart, .auraflow, .flux1, .sdxlBase, .sdxlRefiner, .ssd1b,
             .wurstchenStageB, .wurstchenStageC, .svdI2v, .hunyuanVideo, .wan21_1_3b, .wan21_14b,
             .hiDreamI1, .qwenImage, .cosmos2_5_2b, .wan22_5b, .zImage, .ernieImage, .flux2,
-            .flux2_9b, .flux2_4b, .ltx2, .ltx2_3:
+            .flux2_9b, .flux2_4b, .ltx2, .ltx2_3, .seedvr2_3b, .seedvr2_7b, .ideogram4:
             return DeviceCapability.isLowPerformance
           }
         case .unet:
@@ -1242,7 +1252,7 @@ extension ModelPreloader {
     return firstStageEncoder
   }
   func consumeFirstStageSample(
-    _ x: (DynamicGraph.Tensor<FloatType>, DynamicGraph.Tensor<FloatType>, Model),
+    _ x: (DynamicGraph.Tensor<FloatType>, DynamicGraph.Tensor<FloatType>, Model?),
     firstStage: FirstStage<FloatType>, scale: DeviceCapability.Scale
   ) -> (DynamicGraph.Tensor<FloatType>, DynamicGraph.Tensor<FloatType>) {
     if (mode == .preload || mode == .yes) && isEnabled {
@@ -1257,7 +1267,7 @@ extension ModelPreloader {
     return (x.0, x.1)
   }
   func consumeFirstStageEncode(
-    _ x: (DynamicGraph.Tensor<FloatType>, Model), firstStage: FirstStage<FloatType>,
+    _ x: (DynamicGraph.Tensor<FloatType>, Model?), firstStage: FirstStage<FloatType>,
     scale: DeviceCapability.Scale
   )
     -> DynamicGraph.Tensor<FloatType>
@@ -1274,7 +1284,7 @@ extension ModelPreloader {
     return x.0
   }
   func consumeFirstStageEncode(
-    _ x: ([DynamicGraph.Tensor<FloatType>], Model), firstStage: FirstStage<FloatType>,
+    _ x: ([DynamicGraph.Tensor<FloatType>], Model?), firstStage: FirstStage<FloatType>,
     scale: DeviceCapability.Scale
   )
     -> [DynamicGraph.Tensor<FloatType>]
@@ -1311,7 +1321,7 @@ extension ModelPreloader {
     return firstStageDecoder
   }
   func consumeFirstStageDecode(
-    _ x: (DynamicGraph.Tensor<FloatType>, DynamicGraph.Tensor<Float>?, Model),
+    _ x: (DynamicGraph.Tensor<FloatType>, DynamicGraph.Tensor<Float>?, Model?),
     firstStage: FirstStage<FloatType>,
     scale: DeviceCapability.Scale
   )
@@ -1385,9 +1395,9 @@ extension ModelPreloader {
       return x.x
     }
     switch sampler.version {
-    case .auraflow, .flux1, .hiDreamI1, .hunyuanVideo, .sd3, .sd3Large, .wan21_14b, .wan21_1_3b,
-      .qwenImage, .cosmos2_5_2b, .wan22_5b, .zImage, .ernieImage, .flux2, .flux2_9b, .flux2_4b,
-      .ltx2, .ltx2_3:
+    case .auraflow, .flux1, .hiDreamI1, .hiDreamO1, .hunyuanVideo, .sd3, .sd3Large, .wan21_14b,
+      .wan21_1_3b, .qwenImage, .cosmos2_5_2b, .wan22_5b, .zImage, .ernieImage, .flux2, .flux2_9b,
+      .flux2_4b, .ltx2, .ltx2_3, .seedvr2_3b, .seedvr2_7b, .ideogram4:
       let unet: UNetWrapper<FloatType>? = {
         switch x {
         case .success(let x):

@@ -111,6 +111,8 @@ extension Worker {
       }
 
       let status = try await callInstance.status.get()
+      let userIdDescription = "\(task.payload.userId as Any)"
+      let generationIdDescription = "\(task.payload.generationId as Any)"
       if numberOfImages > 0 {
         let totalTimeMs = Date().timeIntervalSince(task.creationTimestamp) * 1000
         let totalExecutionTimeMs = Date().timeIntervalSince(taskExecuteStartTimestamp) * 1000
@@ -118,10 +120,19 @@ extension Worker {
           "Task total time: \(totalTimeMs)ms, Task execution time: \(totalExecutionTimeMs)ms, (Priority: \(task.priority))"
         )
         logger.info(
-          "Succeed: {\"model\": \"\(task.model)\", \"userid\": \"\(task.payload.userId as Any)\",  \"generationId\": \"\(task.payload.generationId as Any)\", \"images\":\(numberOfImages)}"
+          "Succeed: {\"model\": \"\(task.model)\", \"userid\": \"\(userIdDescription)\",  \"generationId\": \"\(generationIdDescription)\", \"images\":\(numberOfImages)}"
         )
       }
       let isTaskSuccessful = (status.code == .ok) && (numberOfImages > 0)
+      if status.code != .ok {
+        logger.error(
+          "Worker \(id) completed with non-OK status, model:\(task.model), userId:\(userIdDescription), generationId:\(generationIdDescription), status:\(status.code), message:\(status.message ?? ""), images:\(numberOfImages), priority:\(task.priority)"
+        )
+      } else if numberOfImages == 0 {
+        logger.error(
+          "Worker \(id) returned OK with zero generated image responses, model:\(task.model), userId:\(userIdDescription), generationId:\(generationIdDescription), priority:\(task.priority)"
+        )
+      }
 
       if task.payload.consumableType == .boost, let amount = task.payload.amount,
         let generationId = task.payload.generationId
@@ -141,9 +152,15 @@ extension Worker {
       task.promise.succeed(status)
       task.context.statusPromise.succeed(status)
 
-      logger.info(
-        "Worker \(id) completed, generationId: \(task.payload.generationId as Any), successfully (Priority: \(task.priority))"
-      )
+      if isTaskSuccessful {
+        logger.info(
+          "Worker \(id) completed, generationId: \(generationIdDescription), successfully (Priority: \(task.priority))"
+        )
+      } else {
+        logger.info(
+          "Worker \(id) completed without successful final image, generationId: \(generationIdDescription), status:\(status.code), images:\(numberOfImages), (Priority: \(task.priority))"
+        )
+      }
 
     } catch {
       if task.payload.consumableType == .boost, let amount = task.payload.amount,
@@ -182,6 +199,9 @@ actor TaskQueue {
   private var workers: [String: Worker]
   private var deathPool: [String: DeathPoolEntry] = [:]
   private var busyWorkerIDs: Set<String> = []
+  private var workerEchoRejoinTimestamps = [String: [Date]]()
+  private var workerEchoRejoinWindow: TimeInterval = 1800
+  private var workerEchoRejoinLimit = 100
   private let logger: Logger
   var workerIds: [String] {
     return Array(workers.keys)
@@ -325,20 +345,97 @@ actor TaskQueue {
     availabilityContinuation.yield(worker)
   }
 
-  func addWorker(_ worker: Worker) async {
+  private func isWorkerOnHold(_ workerId: String, afterRecordingRejoin: Bool = false) -> Bool {
+    let now = Date()
+    let cutoff = now.addingTimeInterval(-workerEchoRejoinWindow)
+    var timestamps = workerEchoRejoinTimestamps[workerId, default: []].filter { $0 >= cutoff }
+    if afterRecordingRejoin {
+      timestamps.append(now)
+    }
+    if timestamps.isEmpty {
+      workerEchoRejoinTimestamps.removeValue(forKey: workerId)
+    } else {
+      workerEchoRejoinTimestamps[workerId] = timestamps
+    }
+    return timestamps.count > workerEchoRejoinLimit
+  }
+
+  private func currentOnHoldWorkerIds() -> [String] {
+    let cutoff = Date().addingTimeInterval(-workerEchoRejoinWindow)
+    var onHoldWorkerIds = [String]()
+    for (workerId, timestamps) in workerEchoRejoinTimestamps {
+      let recentTimestamps = timestamps.filter { $0 >= cutoff }
+      if recentTimestamps.isEmpty {
+        workerEchoRejoinTimestamps.removeValue(forKey: workerId)
+      } else {
+        workerEchoRejoinTimestamps[workerId] = recentTimestamps
+      }
+      if recentTimestamps.count > workerEchoRejoinLimit {
+        onHoldWorkerIds.append(workerId)
+      }
+    }
+    return onHoldWorkerIds.sorted()
+  }
+
+  func clearWorkerEchoRejoinHold(_ workerId: String) async -> (
+    cleared: Bool, onHoldWorkerIds: [String]
+  ) {
+    let cleared = workerEchoRejoinTimestamps.removeValue(forKey: workerId) != nil
+    let onHoldWorkerIds = currentOnHoldWorkerIds()
+    logger.info(
+      "clear echo rejoin hold for worker \(workerId), cleared:\(cleared), current on hold workers:\(onHoldWorkerIds)"
+    )
+    return (cleared, onHoldWorkerIds)
+  }
+
+  func updateWorkerEchoRejoinPolicy(windowSeconds: Int?, limit: Int?) async -> (
+    windowSeconds: Int, limit: Int
+  ) {
+    if let windowSeconds = windowSeconds, windowSeconds > 0 {
+      workerEchoRejoinWindow = TimeInterval(windowSeconds)
+    }
+    if let limit = limit, limit >= 0 {
+      workerEchoRejoinLimit = limit
+    }
+    _ = currentOnHoldWorkerIds()
+    let currentWindowSeconds = Int(workerEchoRejoinWindow)
+    logger.info(
+      "update echo rejoin policy, worker_echo_rejoin_window_seconds:\(currentWindowSeconds), worker_echo_rejoin_limit:\(workerEchoRejoinLimit)"
+    )
+    return (currentWindowSeconds, workerEchoRejoinLimit)
+  }
+
+  func addWorker(_ worker: Worker) async -> Bool {
     guard worker.client.client != nil else {
       logger.error(
         "can add worker:\(worker) to worker TaskQueue with invalid nioclient connection")
-      return
+      return false
+    }
+    guard !isWorkerOnHold(worker.id, afterRecordingRejoin: true) else {
+      if let existingWorker = workers.removeValue(forKey: worker.id),
+        existingWorker.client !== worker.client
+      {
+        try? existingWorker.client.disconnect()
+      }
+      busyWorkerIDs.remove(worker.id)
+      if let entry = deathPool.removeValue(forKey: worker.id),
+        entry.worker.client !== worker.client
+      {
+        try? entry.worker.client.disconnect()
+      }
+      logger.info(
+        "on hold worker \(worker.id), current on hold workers:\(currentOnHoldWorkerIds())")
+      return false
     }
     let alreadyExists = workers[worker.id] != nil
     workers[worker.id] = worker
     guard !alreadyExists else {
       logger.info("worker:\(worker) already exists in workers, skip adding")
-      return
+      return true
     }
     availabilityContinuation.yield(worker)
     logger.info("add worker:\(worker) to worker TaskQueue and stream")
+    return true
   }
 
   func quarantineWorkerById(_ name: String) async {
@@ -382,6 +479,12 @@ actor TaskQueue {
     }
     guard worker.client.client != nil else {
       logger.error("worker:\(worker.id) has invalid nioclient connection, keep in death pool")
+      return false
+    }
+    guard !isWorkerOnHold(worker.id) else {
+      deathPool.removeValue(forKey: worker.id)
+      logger.info(
+        "on hold worker \(worker.id), current on hold workers:\(currentOnHoldWorkerIds())")
       return false
     }
     workers[worker.id] = worker
@@ -584,11 +687,18 @@ final class ControlPanelService: ControlPanelServiceProvider {
               id: gpuServerName, client: client,
               primaryPriority: request.serverConfig.isHighPriority ? .high : .low)
             await taskQueue.removeDeathPoolWorkerById(gpuServerName)
-            await taskQueue.addWorker(worker)
+            let added = await taskQueue.addWorker(worker)
             let workersId = await taskQueue.workerIds
-            let response = GPUServerResponse.with {
-              $0.message =
+            let message: String
+            if added {
+              message =
                 "added GPU \(gpuServerName) into workers stream, current workers:\(workersId)"
+            } else {
+              try? client.disconnect()
+              message = "on hold worker \(gpuServerName), current workers:\(workersId)"
+            }
+            let response = GPUServerResponse.with {
+              $0.message = message
             }
             promise.succeed(response)
           } else {
@@ -608,6 +718,18 @@ final class ControlPanelService: ControlPanelServiceProvider {
         let response = GPUServerResponse.with {
           $0.message =
             "remove GPU \(gpuServerName) from taskCoordinator, current workers:\(workersId)"
+        }
+        promise.succeed(response)
+      case .clearEchoHold:
+        let result = await taskQueue.clearWorkerEchoRejoinHold(gpuServerName)
+        let response = GPUServerResponse.with {
+          if result.cleared {
+            $0.message =
+              "cleared echo hold for GPU \(gpuServerName), current on hold workers:\(result.onHoldWorkerIds)"
+          } else {
+            $0.message =
+              "no echo hold record for GPU \(gpuServerName), current on hold workers:\(result.onHoldWorkerIds)"
+          }
         }
         promise.succeed(response)
       case .unspecified, .UNRECOGNIZED(_):
@@ -653,12 +775,15 @@ final class ControlPanelService: ControlPanelServiceProvider {
       await controlConfigs.updateThrottlePolicy(
         newPolicies: request.limitConfig.mapValues { Int($0) })
       let currentThrottlePolicies = await controlConfigs.throttlePolicy
+      let echoRejoinPolicy = await taskQueue.updateWorkerEchoRejoinPolicy(
+        windowSeconds: currentThrottlePolicies["worker_echo_rejoin_window_seconds"],
+        limit: currentThrottlePolicies["worker_echo_rejoin_limit"])
       self.logger.info(
-        "Update throttling for \(request.limitConfig), current throttling policies are \(currentThrottlePolicies)"
+        "Update throttling for \(request.limitConfig), current throttling policies are \(currentThrottlePolicies), echo rejoin policy is \(echoRejoinPolicy)"
       )
       let response = ThrottlingResponse.with {
         $0.message =
-          "Update throttling for \(request.limitConfig), current throttling policies are \(currentThrottlePolicies)"
+          "Update throttling for \(request.limitConfig), current throttling policies are \(currentThrottlePolicies), echo rejoin policy is \(echoRejoinPolicy)"
       }
       promise.succeed(response)
     }
@@ -1101,7 +1226,7 @@ final class ImageGenerationProxyService: ImageGenerationServiceProvider {
         while !Task.isCancelled {
           // Abort the task if we cannot send response any more. Send empty response as heartbeat to keep Cloudflare alive.
           let _ = try await context.sendResponse(ImageGenerationResponse()).get()
-          try? await Task.sleep(for: .seconds(20))  // Every 20 seconds send a heartbeat.
+          try? await Task.sleep(for: .seconds(10))  // Every 10 seconds send a heartbeat.
         }
       }
       let task = WorkTask(
@@ -1142,7 +1267,9 @@ final class ImageGenerationProxyService: ImageGenerationServiceProvider {
   )
     -> ProxyTaskPriority
   {
-    if payload.consumableType == .boost || payload.consumableType == .payg || payload.consumableType == .paygFree {
+    if payload.consumableType == .boost || payload.consumableType == .payg
+      || payload.consumableType == .paygFree
+    {
       return .real
     }
 
@@ -1314,6 +1441,8 @@ public class ProxyCPUServer {
         "community_free_worker_threshold": 0,
         "throttle_queue_timeout_seconds": 3600,
         "task_loop_breakout_seconds": 30,
+        "worker_echo_rejoin_window_seconds": 1800,
+        "worker_echo_rejoin_limit": 100,
         "24_hour_from_bridge_plus": 500, "24_hour_from_bridge": 100,
         "24_hour_payg": 50000,
         "15_min_payg": 3000, "10_min_payg": 2000, "5_min_payg": 1000,

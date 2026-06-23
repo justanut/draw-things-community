@@ -27,6 +27,9 @@ public struct TiktokenTokenizer {
     let jsonVocabulary = try! JSONDecoder().decode([String: Int32].self, from: vocabulary)
     var decoder = [Int32: Data]()
     var vocabulary = [Data: Int32]()
+    for (key, value) in specialTokens {
+      decoder[value] = key.data(using: .utf8)
+    }
     for (k, v) in jsonVocabulary {
       let bytes = Self.unicodeToBytes(k)
       decoder[v] = bytes
@@ -84,13 +87,89 @@ public struct TiktokenTokenizer {
     self.specialTokens = Array(specialTokens)
   }
 
-  public func decode(_ tokens: [Int32]) -> String {
-    let data = tokens.flatMap {
-      let token = decoder[$0, default: Data()]
-      guard !token.isEmpty else { return [UInt8]() }
-      return [UInt8](token)
+  public func decode(_ tokens: [Int32], specialTokens: [Int32: String] = [:]) -> String {
+    guard !specialTokens.isEmpty else {
+      let data = tokens.flatMap {
+        let token = decoder[$0, default: Data()]
+        guard !token.isEmpty else { return [UInt8]() }
+        return [UInt8](token)
+      }
+      return String(data: Data(data), encoding: .utf8) ?? ""
     }
-    return String(data: Data(data), encoding: .utf8) ?? ""
+    var text = ""
+    var data = [UInt8]()
+    for tokenId in tokens {
+      if let specialToken = specialTokens[tokenId] {
+        text += String(data: Data(data), encoding: .utf8) ?? ""
+        data.removeAll()
+        text += specialToken
+        continue
+      }
+      let token = decoder[tokenId, default: Data()]
+      guard !token.isEmpty else { continue }
+      data.append(contentsOf: token)
+    }
+    text += String(data: Data(data), encoding: .utf8) ?? ""
+    return text
+  }
+
+  public func makeTokenStreamer(
+    specialTokens: [Int32: String] = [:]
+  ) -> TokenStreamer {
+    TokenStreamer(tokenDecoder: decoder, specialTokens: specialTokens)
+  }
+
+  public struct TokenStreamer {
+    private let tokenDecoder: [Int32: Data]
+    private let specialTokens: [Int32: String]
+    private var pendingBytes = [UInt8]()
+
+    fileprivate init(tokenDecoder: [Int32: Data], specialTokens: [Int32: String]) {
+      self.tokenDecoder = tokenDecoder
+      self.specialTokens = specialTokens
+    }
+
+    public mutating func append(_ tokens: [Int32]) -> String {
+      var text = ""
+      for tokenId in tokens {
+        if let specialToken = specialTokens[tokenId] {
+          text += finish()
+          text += specialToken
+          continue
+        }
+        let token = tokenDecoder[tokenId, default: Data()]
+        guard !token.isEmpty else { continue }
+        pendingBytes.append(contentsOf: token)
+        text += consumeCompleteText()
+      }
+      return text
+    }
+
+    public mutating func finish() -> String {
+      let text = String(data: Data(pendingBytes), encoding: .utf8) ?? ""
+      pendingBytes.removeAll(keepingCapacity: true)
+      return text
+    }
+
+    private mutating func consumeCompleteText() -> String {
+      guard !pendingBytes.isEmpty else { return "" }
+      if let text = String(data: Data(pendingBytes), encoding: .utf8) {
+        pendingBytes.removeAll(keepingCapacity: true)
+        return text
+      }
+      for suffixLength in 1...min(3, pendingBytes.count) {
+        let prefixLength = pendingBytes.count - suffixLength
+        guard prefixLength > 0 else { break }
+        guard
+          let text = String(data: Data(pendingBytes[..<prefixLength]), encoding: .utf8)
+        else {
+          continue
+        }
+        pendingBytes.removeFirst(prefixLength)
+        return text
+      }
+      return ""
+    }
   }
 
   /// byte → Unicode scalar

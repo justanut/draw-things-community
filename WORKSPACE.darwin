@@ -79,9 +79,9 @@ dflat_deps()
 
 git_repository(
     name = "s4nnc",
-    commit = "51cbf33c876e5c6361356c5885b979ba3fe8ae66",
+    commit = "594050126b5cee0dd18488dc05a57947df912878",
     remote = "https://github.com/liuliu/s4nnc.git",
-    shallow_since = "1776748492 -0400",
+    shallow_since = "1778268631 -0400",
 )
 
 load("@s4nnc//:deps.bzl", "s4nnc_deps")
@@ -201,7 +201,7 @@ new_git_repository(
 new_git_repository(
     name = "SwiftNIO",
     build_file = "swift-nio.BUILD",
-    commit = "a16e2f54a25b2af217044e5168997009a505930f",
+    commit = "57c0a08a331aaea9f5d7a932ad94ef43be942a95",
     remote = "https://github.com/apple/swift-nio.git",
 )
 

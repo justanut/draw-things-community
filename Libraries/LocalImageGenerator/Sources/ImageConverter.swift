@@ -712,6 +712,8 @@ public enum ImageConverter {
       let taesd: ManagedMLModel?
       let isVideo: Bool
       switch version {
+      case .hiDreamO1:
+        return []
       case .flux1, .hiDreamI1, .zImage:
         imageHeight = shape[1] * 8
         imageWidth = shape[2] * 8
@@ -948,7 +950,7 @@ public enum ImageConverter {
         default:
           return []
         }
-      case .hunyuanVideo, .kandinsky21, .wan22_5b,
+      case .hunyuanVideo, .kandinsky21, .wan22_5b, .seedvr2_3b, .seedvr2_7b, .ideogram4,
         .wurstchenStageB, .wurstchenStageC:
         return []
       }
@@ -1221,6 +1223,57 @@ public enum ImageConverter {
     let imageHeight = shape[1]
     let imageWidth = shape[2]
     let channels = shape[3]
+    if version == .hiDreamO1 {
+      let patchSize = 32
+      guard channels == 3 * patchSize * patchSize else { return ([], false) }
+      let outputWidth = imageWidth * patchSize
+      let outputHeight = imageHeight * patchSize
+      return tensor.withUnsafeBytes {
+        guard let fp16 = $0.baseAddress?.assumingMemoryBound(to: FloatType.self) else {
+          return ([], false)
+        }
+        var images = [CGImage]()
+        for b in 0..<batchSize {
+          let bytes = UnsafeMutablePointer<UInt8>.allocate(capacity: outputWidth * outputHeight * 4)
+          let fp16 = fp16 + b * imageHeight * imageWidth * channels
+          for y in 0..<outputHeight {
+            let patchY = y / patchSize
+            let patchYOffset = y % patchSize
+            for x in 0..<outputWidth {
+              let patchX = x / patchSize
+              let patchXOffset = x % patchSize
+              let patchPixelOffset = patchYOffset * patchSize + patchXOffset
+              let patchOffset =
+                ((patchY * imageWidth + patchX) * channels
+                  + patchPixelOffset)
+              let pixelOffset = (y * outputWidth + x) * 4
+              let r = (fp16[patchOffset] + 1) * 127.5
+              let g = (fp16[patchOffset + patchSize * patchSize] + 1) * 127.5
+              let b = (fp16[patchOffset + patchSize * patchSize * 2] + 1) * 127.5
+              bytes[pixelOffset] = UInt8(min(max(Int(r.isFinite ? r : 0), 0), 255))
+              bytes[pixelOffset + 1] = UInt8(min(max(Int(g.isFinite ? g : 0), 0), 255))
+              bytes[pixelOffset + 2] = UInt8(min(max(Int(b.isFinite ? b : 0), 0), 255))
+              bytes[pixelOffset + 3] = 255
+            }
+          }
+          images.append(
+            CGImage(
+              width: outputWidth, height: outputHeight, bitsPerComponent: 8, bitsPerPixel: 32,
+              bytesPerRow: 4 * outputWidth, space: CGColorSpaceCreateDeviceRGB(),
+              bitmapInfo: CGBitmapInfo(
+                rawValue: CGBitmapInfo.byteOrder32Big.rawValue
+                  | CGImageAlphaInfo.noneSkipLast.rawValue),
+              provider: CGDataProvider(
+                dataInfo: nil, data: bytes, size: outputWidth * outputHeight * 4,
+                releaseData: { _, p, _ in
+                  p.deallocate()
+                })!, decode: nil, shouldInterpolate: false,
+              intent: CGColorRenderingIntent.defaultIntent
+            )!)
+        }
+        return (images, false)
+      }
+    }
     guard
       channels == 4 || channels == 3 || channels == 16 || channels == 32 || channels == 48
         || channels == 128
@@ -1300,7 +1353,7 @@ public enum ImageConverter {
             bytes[i * 4 + 2] = UInt8(min(max(Int(b.isFinite ? b : 0), 0), 255))
             bytes[i * 4 + 3] = 255
           }
-        case .flux1, .hiDreamI1, .zImage:
+        case .flux1, .hiDreamI1, .zImage, .seedvr2_3b, .seedvr2_7b:
           for i in 0..<imageHeight * imageWidth {
             let (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15) = (
               fp16[i * 16], fp16[i * 16 + 1], fp16[i * 16 + 2], fp16[i * 16 + 3],
@@ -1333,7 +1386,7 @@ public enum ImageConverter {
             bytes[i * 4 + 2] = UInt8(min(max(Int(b.isFinite ? b : 0), 0), 255))
             bytes[i * 4 + 3] = 255
           }
-        case .ernieImage, .flux2, .flux2_9b, .flux2_4b:
+        case .ernieImage, .flux2, .flux2_9b, .flux2_4b, .ideogram4:
           for i in 0..<imageHeight * imageWidth {
             let (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15) = (
               fp16[i * 32], fp16[i * 32 + 1], fp16[i * 32 + 2], fp16[i * 32 + 3],
@@ -1381,7 +1434,7 @@ public enum ImageConverter {
             bytes[i * 4 + 2] = UInt8(min(max(Int(b.isFinite ? b : 0), 0), 255))
             bytes[i * 4 + 3] = 255
           }
-        case .ltx2, .ltx2_3:
+        case .hiDreamO1, .ltx2, .ltx2_3:
           bytes.deallocate()
           continue
         case .hunyuanVideo:

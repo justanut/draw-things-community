@@ -47,6 +47,8 @@ public struct ModelZoo: DownloadZoo {
       return "Wan v2.x 14B"
     case .hiDreamI1:
       return "HiDream I1"
+    case .hiDreamO1:
+      return "HiDream O1"
     case .qwenImage:
       return "Qwen Image"
     case .wan22_5b:
@@ -67,6 +69,10 @@ public struct ModelZoo: DownloadZoo {
       return "LTX-2"
     case .ltx2_3:
       return "LTX-2.3"
+    case .seedvr2_3b, .seedvr2_7b:
+      return "SeedVR2"
+    case .ideogram4:
+      return "Ideogram 4"
     }
   }
 
@@ -318,6 +324,7 @@ public struct ModelZoo: DownloadZoo {
     public var audioLatentsMean: [Float]?
     public var audioLatentsStd: [Float]?
     public var latentsScalingFactor: Float?
+    public var noiseScalingFactor: Float?
     public var stageModels: [String]?
     public var textEncoderVersion: TextEncoderVersion?
     public var guidanceEmbed: Bool?
@@ -344,7 +351,8 @@ public struct ModelZoo: DownloadZoo {
       conditioning: Denoiser.Conditioning? = nil, objective: Denoiser.Objective? = nil,
       noiseDiscretization: NoiseDiscretization? = nil, latentsMean: [Float]? = nil,
       latentsStd: [Float]? = nil, audioLatentsMean: [Float]? = nil, audioLatentsStd: [Float]? = nil,
-      latentsScalingFactor: Float? = nil, stageModels: [String]? = nil,
+      latentsScalingFactor: Float? = nil, noiseScalingFactor: Float? = nil,
+      stageModels: [String]? = nil,
       textEncoderVersion: TextEncoderVersion? = nil, guidanceEmbed: Bool? = nil,
       paddedTextEncodingLength: Int? = nil, hiresFixScale: UInt16? = nil, mmdit: MMDiT? = nil,
       builtinLora: Bool? = nil, teaCacheCoefficients: [Float]? = nil,
@@ -379,6 +387,7 @@ public struct ModelZoo: DownloadZoo {
       self.audioLatentsMean = audioLatentsMean
       self.audioLatentsStd = audioLatentsStd
       self.latentsScalingFactor = latentsScalingFactor
+      self.noiseScalingFactor = noiseScalingFactor
       self.stageModels = stageModels
       self.textEncoderVersion = textEncoderVersion
       self.guidanceEmbed = guidanceEmbed
@@ -810,6 +819,22 @@ public struct ModelZoo: DownloadZoo {
       "f7c804dd0e4ae14af2ff200fc96b2848b2967f7595bac830bf270ea39b47a611",
     "ltx_2.3_22b_distilled_1.1_i8x.ckpt":
       "c2bb0ac129aab08a0759b1c4d9a3e0c2202a4ae7a4e942c32d362f6559613d92",
+    "seedvr2_vae_f16.ckpt":
+      "af2a4a8eeae04372667ba4d6f6dd1337af0b3685d0e335dfc5abf71374a24234",
+    "seedvr2_3b_q8p.ckpt":
+      "cdde46771a8af490b97853c8fb255864a64d1528b40b1ebf2dee161db2b76fcd",
+    "seedvr2_3b_i8x.ckpt":
+      "c6cc6f936f3acea3bd3809f176b27696aee3f7a995cbb9083b45b03a3233698e",
+    "seedvr2_3b_q6p.ckpt":
+      "160a5daefec6292b50e41a8dd74e0c91702f5571f4f5e43f51c58eb01718e0ea",
+    "seedvr2_7b_q8p.ckpt":
+      "acb88f9c581d2668eead19742c4fcc8f7af515ff3abf9a4ffd7450e731bed9ce",
+    "seedvr2_7b_i8x.ckpt":
+      "05daa3433a3719854498ea3694a14e3ecde2c1a8f2a4fc7c4f02ac9ff7ba5a78",
+    "seedvr2_7b_q6p.ckpt":
+      "92d193e4da2b2bea6e7877ca6c011d693da6dbc9bc9b735aee8c102905fa446f",
+    "hidream_o1_dev_2604_i8x.ckpt":
+      "d8588595c6177ed451d7843af999577f424376c4d2ef77f9408883a13ec0b231",
   ]
 
   public static let defaultSpecification: Specification = builtinSpecifications[0]
@@ -984,6 +1009,30 @@ public struct ModelZoo: DownloadZoo {
       copyright: "© 2026 Lightricks"
     ),
     Specification(
+      name: "ERNIE Image Turbo 1.0", file: "ernie_image_turbo_q8p.ckpt", prefix: "",
+      version: .ernieImage, defaultScale: 16, textEncoder: "ministral_3_3b_q8p.ckpt",
+      autoencoder: "flux_2_vae_f16.ckpt", hiresFixScale: 24,
+      note:
+        "[ERNIE-Image-Turbo](https://huggingface.co/baidu/ERNIE-Image-Turbo) is Baidu's Apache 2.0-licensed distilled release of ERNIE-Image, optimized with DMD and RL for fast generation. It keeps the same focus on instruction following, text rendering, and structured layouts, while targeting strong results with CFG 1 and 8 sampling steps.",
+      copyright: "© 2026 Baidu", huggingFaceLink: "baidu/ERNIE-Image-Turbo"
+    ),
+    Specification(
+      name: "ERNIE Image Turbo 1.0 (8-bit S)", file: "ernie_image_turbo_i8x.ckpt", prefix: "",
+      version: .ernieImage, defaultScale: 16, textEncoder: "ministral_3_3b_q8p.ckpt",
+      autoencoder: "flux_2_vae_f16.ckpt", hiresFixScale: 24,
+      note:
+        "[ERNIE-Image-Turbo](https://huggingface.co/baidu/ERNIE-Image-Turbo) is Baidu's Apache 2.0-licensed distilled release of ERNIE-Image, optimized with DMD and RL for fast generation. It keeps the same focus on instruction following, text rendering, and structured layouts, while targeting strong results with CFG 1 and 8 sampling steps.",
+      copyright: "© 2026 Baidu", huggingFaceLink: "baidu/ERNIE-Image-Turbo"
+    ),
+    Specification(
+      name: "ERNIE Image Turbo 1.0 (6-bit)", file: "ernie_image_turbo_q6p.ckpt", prefix: "",
+      version: .ernieImage, defaultScale: 16, textEncoder: "ministral_3_3b_q8p.ckpt",
+      autoencoder: "flux_2_vae_f16.ckpt", hiresFixScale: 24,
+      note:
+        "[ERNIE-Image-Turbo](https://huggingface.co/baidu/ERNIE-Image-Turbo) is Baidu's Apache 2.0-licensed distilled release of ERNIE-Image, optimized with DMD and RL for fast generation. It keeps the same focus on instruction following, text rendering, and structured layouts, while targeting strong results with CFG 1 and 8 sampling steps.",
+      copyright: "© 2026 Baidu"
+    ),
+    Specification(
       name: "ERNIE Image Base 1.0", file: "ernie_image_q8p.ckpt", prefix: "",
       version: .ernieImage, defaultScale: 16, textEncoder: "ministral_3_3b_q8p.ckpt",
       autoencoder: "flux_2_vae_f16.ckpt", hiresFixScale: 24,
@@ -1008,28 +1057,68 @@ public struct ModelZoo: DownloadZoo {
       copyright: "© 2026 Baidu"
     ),
     Specification(
-      name: "ERNIE Image Turbo 1.0", file: "ernie_image_turbo_q8p.ckpt", prefix: "",
-      version: .ernieImage, defaultScale: 16, textEncoder: "ministral_3_3b_q8p.ckpt",
-      autoencoder: "flux_2_vae_f16.ckpt", hiresFixScale: 24,
+      name: "SeedVR2 3B", file: "seedvr2_3b_q8p.ckpt", prefix: "",
+      version: .seedvr2_3b, defaultScale: 24, textEncoder: "seedvr2_3b_q8p.ckpt",
+      autoencoder: "seedvr2_vae_f16.ckpt", modifier: .inpainting,
+      objective: .u(conditionScale: 1000),
+      noiseDiscretization: .rf(.init(sigmaMin: 0, sigmaMax: 1, conditionScale: 1_000)),
+      latentsScalingFactor: 0.9152, hiresFixScale: 512,
       note:
-        "[ERNIE-Image-Turbo](https://huggingface.co/baidu/ERNIE-Image-Turbo) is Baidu's Apache 2.0-licensed distilled release of ERNIE-Image, optimized with DMD and RL for fast generation. It keeps the same focus on instruction following, text rendering, and structured layouts, while targeting strong results with CFG 1 and 8 sampling steps.",
-      copyright: "© 2026 Baidu", huggingFaceLink: "baidu/ERNIE-Image-Turbo"
+        "[SeedVR2 3B](https://huggingface.co/ByteDance-Seed/SeedVR2-3B) is ByteDance Seed's Apache 2.0-licensed one-step diffusion video restoration model. It uses adversarial post-training on real data and adaptive window attention for high-resolution restoration, targeting fast video enhancement from degraded inputs.",
+      huggingFaceLink: "ByteDance-Seed/SeedVR2-3B"
     ),
     Specification(
-      name: "ERNIE Image Turbo 1.0 (8-bit S)", file: "ernie_image_turbo_i8x.ckpt", prefix: "",
-      version: .ernieImage, defaultScale: 16, textEncoder: "ministral_3_3b_q8p.ckpt",
-      autoencoder: "flux_2_vae_f16.ckpt", hiresFixScale: 24,
+      name: "SeedVR2 3B (8-bit S)", file: "seedvr2_3b_i8x.ckpt", prefix: "",
+      version: .seedvr2_3b, defaultScale: 24, textEncoder: "seedvr2_3b_i8x.ckpt",
+      autoencoder: "seedvr2_vae_f16.ckpt", modifier: .inpainting,
+      objective: .u(conditionScale: 1000),
+      noiseDiscretization: .rf(.init(sigmaMin: 0, sigmaMax: 1, conditionScale: 1_000)),
+      latentsScalingFactor: 0.9152, hiresFixScale: 512,
       note:
-        "[ERNIE-Image-Turbo](https://huggingface.co/baidu/ERNIE-Image-Turbo) is Baidu's Apache 2.0-licensed distilled release of ERNIE-Image, optimized with DMD and RL for fast generation. It keeps the same focus on instruction following, text rendering, and structured layouts, while targeting strong results with CFG 1 and 8 sampling steps.",
-      copyright: "© 2026 Baidu", huggingFaceLink: "baidu/ERNIE-Image-Turbo"
+        "[SeedVR2 3B](https://huggingface.co/ByteDance-Seed/SeedVR2-3B) is ByteDance Seed's Apache 2.0-licensed one-step diffusion video restoration model. It uses adversarial post-training on real data and adaptive window attention for high-resolution restoration, targeting fast video enhancement from degraded inputs.",
+      huggingFaceLink: "ByteDance-Seed/SeedVR2-3B"
     ),
     Specification(
-      name: "ERNIE Image Turbo 1.0 (6-bit)", file: "ernie_image_turbo_q6p.ckpt", prefix: "",
-      version: .ernieImage, defaultScale: 16, textEncoder: "ministral_3_3b_q8p.ckpt",
-      autoencoder: "flux_2_vae_f16.ckpt", hiresFixScale: 24,
+      name: "SeedVR2 3B (6-bit)", file: "seedvr2_3b_q6p.ckpt", prefix: "",
+      version: .seedvr2_3b, defaultScale: 24, textEncoder: "seedvr2_3b_q6p.ckpt",
+      autoencoder: "seedvr2_vae_f16.ckpt", modifier: .inpainting,
+      objective: .u(conditionScale: 1000),
+      noiseDiscretization: .rf(.init(sigmaMin: 0, sigmaMax: 1, conditionScale: 1_000)),
+      latentsScalingFactor: 0.9152, hiresFixScale: 512,
       note:
-        "[ERNIE-Image-Turbo](https://huggingface.co/baidu/ERNIE-Image-Turbo) is Baidu's Apache 2.0-licensed distilled release of ERNIE-Image, optimized with DMD and RL for fast generation. It keeps the same focus on instruction following, text rendering, and structured layouts, while targeting strong results with CFG 1 and 8 sampling steps.",
-      copyright: "© 2026 Baidu"
+        "[SeedVR2 3B](https://huggingface.co/ByteDance-Seed/SeedVR2-3B) is ByteDance Seed's Apache 2.0-licensed one-step diffusion video restoration model. It uses adversarial post-training on real data and adaptive window attention for high-resolution restoration, targeting fast video enhancement from degraded inputs."
+    ),
+    Specification(
+      name: "SeedVR2 7B", file: "seedvr2_7b_q8p.ckpt", prefix: "",
+      version: .seedvr2_7b, defaultScale: 24, textEncoder: "seedvr2_7b_q8p.ckpt",
+      autoencoder: "seedvr2_vae_f16.ckpt", modifier: .inpainting,
+      objective: .u(conditionScale: 1000),
+      noiseDiscretization: .rf(.init(sigmaMin: 0, sigmaMax: 1, conditionScale: 1_000)),
+      latentsScalingFactor: 0.9152, hiresFixScale: 512,
+      note:
+        "[SeedVR2 7B](https://huggingface.co/ByteDance-Seed/SeedVR2-7B) is the larger ByteDance Seed Apache 2.0-licensed one-step diffusion video restoration model. It uses adversarial post-training on real data and adaptive window attention for high-resolution restoration, targeting fast video enhancement from degraded inputs.",
+      huggingFaceLink: "ByteDance-Seed/SeedVR2-7B"
+    ),
+    Specification(
+      name: "SeedVR2 7B (8-bit S)", file: "seedvr2_7b_i8x.ckpt", prefix: "",
+      version: .seedvr2_7b, defaultScale: 24, textEncoder: "seedvr2_7b_i8x.ckpt",
+      autoencoder: "seedvr2_vae_f16.ckpt", modifier: .inpainting,
+      objective: .u(conditionScale: 1000),
+      noiseDiscretization: .rf(.init(sigmaMin: 0, sigmaMax: 1, conditionScale: 1_000)),
+      latentsScalingFactor: 0.9152, hiresFixScale: 512,
+      note:
+        "[SeedVR2 7B](https://huggingface.co/ByteDance-Seed/SeedVR2-7B) is the larger ByteDance Seed Apache 2.0-licensed one-step diffusion video restoration model. It uses adversarial post-training on real data and adaptive window attention for high-resolution restoration, targeting fast video enhancement from degraded inputs.",
+      huggingFaceLink: "ByteDance-Seed/SeedVR2-7B"
+    ),
+    Specification(
+      name: "SeedVR2 7B (6-bit)", file: "seedvr2_7b_q6p.ckpt", prefix: "",
+      version: .seedvr2_7b, defaultScale: 24, textEncoder: "seedvr2_7b_q6p.ckpt",
+      autoencoder: "seedvr2_vae_f16.ckpt", modifier: .inpainting,
+      objective: .u(conditionScale: 1000),
+      noiseDiscretization: .rf(.init(sigmaMin: 0, sigmaMax: 1, conditionScale: 1_000)),
+      latentsScalingFactor: 0.9152, hiresFixScale: 512,
+      note:
+        "[SeedVR2 7B](https://huggingface.co/ByteDance-Seed/SeedVR2-7B) is the larger ByteDance Seed Apache 2.0-licensed one-step diffusion video restoration model. It uses adversarial post-training on real data and adaptive window attention for high-resolution restoration, targeting fast video enhancement from degraded inputs."
     ),
     Specification(
       name: "Z Image Turbo 1.0", file: "z_image_turbo_1.0_q8p.ckpt", prefix: "",
@@ -1257,6 +1346,25 @@ public struct ModelZoo: DownloadZoo {
       note:
         "[FLUX.2 [klein] 4B Base](https://huggingface.co/black-forest-labs/FLUX.2-klein-base-4B) is a 4 billion parameter rectified flow transformer capable of generating, editing and combining images based on text instructions.",
       copyright: "© 2026 Black Forest Labs"
+    ),
+    Specification(
+      name: "HiDream O1 [dev] 2604 (8-bit S)", file: "hidream_o1_dev_2604_i8x.ckpt", prefix: "",
+      version: .hiDreamO1, defaultScale: 16, textEncoder: "hidream_o1_dev_2604_i8x.ckpt",
+      autoencoder: "hidream_o1_dev_2604_i8x.ckpt", objective: .u(conditionScale: 1000),
+      noiseScalingFactor: 7.5, paddedTextEncodingLength: 0,
+      note:
+        "HiDream O1 is a Qwen3-style image generation model with no external text encoder or VAE. It uses RGB patch diffusion directly with a model-specific initial noise scale.",
+      huggingFaceLink: "HiDream-ai/HiDream-O1"
+    ),
+    Specification(
+      name: "Ideogram 4 (8-bit S)", file: "ideogram_4_i8x.ckpt", prefix: "",
+      version: .ideogram4, defaultScale: 16, textEncoder: "qwen_3_vl_8b_instruct_q8p.ckpt",
+      autoencoder: "flux_2_vae_f16.ckpt", objective: .u(conditionScale: 1000),
+      noiseDiscretization: .rf(.init(sigmaMin: 0, sigmaMax: 1, conditionScale: 1_000)),
+      paddedTextEncodingLength: 0, hiresFixScale: 24,
+      note:
+        "[Ideogram 4](https://huggingface.co/ideogram-ai/ideogram-4-fp8) is Ideogram's non-commercial text-to-image release. The Hugging Face release packages the FP8 checkpoint for Diffusers as an Ideogram4Pipeline flow-matching DiT, with benchmark material focused on typography, design, and image quality. Ideogram's native prompting path uses structured JSON captions with a high-level description and compositional deconstruction of background, objects, and text elements; prompt upsampling converts short user ideas into that schema. This Draw Things entry uses Qwen3-VL 8B Instruct for text encoding and the FLUX.2 VAE.",
+      copyright: "© 2026 Ideogram", huggingFaceLink: "ideogram-ai/ideogram-4-fp8"
     ),
     Specification(
       name: "Qwen Image 1.0", file: "qwen_image_1.0_q8p.ckpt", prefix: "",
@@ -2715,7 +2823,8 @@ public struct ModelZoo: DownloadZoo {
     case .cosmos2_5_2b:
       return .u(conditionScale: 1)
     case .sd3, .sd3Large, .auraflow, .flux1, .hunyuanVideo, .wan21_1_3b, .wan21_14b, .hiDreamI1,
-      .qwenImage, .wan22_5b, .zImage, .flux2, .flux2_9b, .flux2_4b, .ltx2, .ltx2_3, .ernieImage:
+      .hiDreamO1, .qwenImage, .wan22_5b, .zImage, .flux2, .flux2_9b, .flux2_4b, .ltx2, .ltx2_3,
+      .ernieImage, .seedvr2_3b, .seedvr2_7b, .ideogram4:
       return .u(conditionScale: 1000)
     }
   }
@@ -2728,9 +2837,9 @@ public struct ModelZoo: DownloadZoo {
     switch specification.version {
     case .kandinsky21, .sdxlBase, .sdxlRefiner, .v1, .v2, .ssd1b, .wurstchenStageC,
       .wurstchenStageB, .sd3, .sd3Large, .pixart, .auraflow, .flux1, .hunyuanVideo, .wan21_1_3b,
-      .wan21_14b, .hiDreamI1, .qwenImage, .wan22_5b, .zImage, .ernieImage, .flux2, .flux2_9b,
-      .flux2_4b,
-      .cosmos2_5_2b, .ltx2, .ltx2_3:
+      .wan21_14b, .hiDreamI1, .hiDreamO1, .qwenImage, .wan22_5b, .zImage, .ernieImage, .flux2,
+      .flux2_9b, .flux2_4b,
+      .cosmos2_5_2b, .ltx2, .ltx2_3, .seedvr2_3b, .seedvr2_7b, .ideogram4:
       return .timestep
     case .svdI2v:
       return .noise
@@ -2762,7 +2871,8 @@ public struct ModelZoo: DownloadZoo {
     case .cosmos2_5_2b:
       return .rf(.init(sigmaMin: 0, sigmaMax: 1, conditionScale: 1))
     case .sd3, .sd3Large, .auraflow, .flux1, .hunyuanVideo, .wan21_1_3b, .wan21_14b, .hiDreamI1,
-      .qwenImage, .wan22_5b, .zImage, .flux2, .flux2_9b, .flux2_4b, .ltx2, .ltx2_3, .ernieImage:
+      .hiDreamO1, .qwenImage, .wan22_5b, .zImage, .flux2, .flux2_9b, .flux2_4b, .ltx2, .ltx2_3,
+      .ernieImage, .seedvr2_3b, .seedvr2_7b, .ideogram4:
       return .rf(.init(sigmaMin: 0, sigmaMax: 1, conditionScale: 1_000))
     }
   }
@@ -2784,7 +2894,8 @@ public struct ModelZoo: DownloadZoo {
       return 512
     case .hiDreamI1:
       return 128
-    case .hunyuanVideo, .qwenImage, .zImage, .ernieImage, .flux2, .ltx2, .ltx2_3:
+    case .hiDreamO1, .hunyuanVideo, .qwenImage, .zImage, .ernieImage, .flux2, .ltx2, .ltx2_3,
+      .seedvr2_3b, .seedvr2_7b, .ideogram4:
       return 0
     case .wan21_1_3b, .wan21_14b, .wan22_5b, .flux2_9b, .flux2_4b, .cosmos2_5_2b:
       return 512
@@ -2813,7 +2924,7 @@ public struct ModelZoo: DownloadZoo {
       return (nil, nil, 0.18215, nil, nil, nil)
     case .ssd1b, .sdxlBase, .sdxlRefiner, .pixart, .auraflow:
       return (nil, nil, 0.13025, nil, nil, nil)
-    case .kandinsky21:
+    case .kandinsky21, .hiDreamO1:
       return (nil, nil, 1, nil, nil, nil)
     case .wurstchenStageC, .wurstchenStageB:
       return (nil, nil, 2.32558139535, nil, nil, nil)
@@ -2821,6 +2932,8 @@ public struct ModelZoo: DownloadZoo {
       return (nil, nil, 1.5305, 0.0609, nil, nil)
     case .flux1, .hiDreamI1, .zImage:
       return (nil, nil, 0.3611, 0.11590, nil, nil)
+    case .seedvr2_3b, .seedvr2_7b:
+      return (nil, nil, 0.9152, nil, nil, nil)
     case .hunyuanVideo:
       return (nil, nil, 0.476986, nil, nil, nil)
     case .wan21_1_3b, .wan21_14b, .qwenImage, .cosmos2_5_2b:
@@ -2849,6 +2962,57 @@ public struct ModelZoo: DownloadZoo {
           0.8986, 0.5659, 0.7069, 0.5338, 0.4889, 0.4917, 0.4069,
           0.4999, 0.6866, 0.4093, 0.5709, 0.6065, 0.6415, 0.4944, 0.5726, 1.2042, 0.5458, 1.6887,
           0.3971, 1.0600, 0.3943, 0.5537, 0.5444, 0.4089, 0.7468, 0.7744,
+        ], 1, nil, nil, nil
+      )
+    case .ideogram4:
+      return (
+        [
+          0.01984364, 0.10149707, 0.29689495, 0.27188619, -0.21445648, -0.15979549,
+          0.05021099, -0.15083604, -0.15360136, -0.20131799, 0.01922352, 0.0622626,
+          0.10140969, -0.06739428, 0.3758261, -0.233712, 0.35164491, -0.02590912,
+          -0.0271935, -0.10833897, -0.1476848, -0.01130957, -0.2298372, 0.23526423,
+          -0.10893522, 0.11957631, 0.04047799, 0.3134589, -0.17225064, -0.18646109,
+          -0.34691978, -0.03571246, 0.02583857, 0.10190072, 0.28402294, 0.26952152,
+          -0.21634675, -0.17938656, 0.04358909, -0.15007621, -0.1548502, -0.18971131,
+          0.02710861, 0.05609494, 0.10697846, -0.06854968, 0.38167698, -0.24269937,
+          0.35705471, -0.03063305, -0.02946109, -0.11244286, -0.14336038, -0.01362137,
+          -0.21863696, 0.23228983, -0.11739769, 0.11693044, 0.02563311, 0.31356594,
+          -0.17420591, -0.19006285, -0.34905377, -0.04025005, 0.01924137, 0.07652984,
+          0.2995608, 0.2628057, -0.22011674, -0.12715361, 0.04879879, -0.14075719,
+          -0.15935895, -0.2123584, 0.01974813, 0.05523547, 0.10011992, -0.06428964,
+          0.37781868, -0.21491644, 0.34254215, -0.03153528, -0.0310082, -0.10761415,
+          -0.14730405, -0.02475182, -0.2285588, 0.2515081, -0.10445128, 0.12446,
+          0.07062869, 0.30880162, -0.18016875, -0.18869164, -0.34533499, -0.0129177,
+          0.02578168, 0.07993659, 0.28642181, 0.26038408, -0.22459419, -0.14820155,
+          0.04059549, -0.14043529, -0.16111187, -0.2020305, 0.02602069, 0.04852717,
+          0.10432153, -0.06309942, 0.38402443, -0.22397003, 0.34814481, -0.03774432,
+          -0.03381438, -0.11245691, -0.14128767, -0.02853208, -0.21752016, 0.24872463,
+          -0.11399775, 0.1222687, 0.05620835, 0.309178, -0.18065738, -0.19401479,
+          -0.34495114, -0.01760592,
+        ],
+        [
+          1.63933691, 1.70204478, 1.73642566, 1.90004803, 1.6675316, 1.69059584,
+          1.56853198, 1.62314944, 1.89106626, 1.58086668, 1.60822129, 1.60962993,
+          1.63322129, 1.56074359, 1.73419528, 1.7919265, 1.64040632, 1.66802808,
+          1.60390303, 1.75480492, 1.63187587, 1.64334594, 1.61722884, 1.60146046,
+          1.63459219, 1.55291476, 1.68771497, 1.68415657, 1.78966054, 1.66631641,
+          1.65626686, 1.65976433, 1.63487607, 1.69513249, 1.72933756, 1.91310663,
+          1.67035057, 1.72286863, 1.56719251, 1.61934825, 1.88628859, 1.56911539,
+          1.59455129, 1.60829869, 1.62470611, 1.56052853, 1.73677003, 1.77563606,
+          1.63732541, 1.66370527, 1.59508952, 1.75153949, 1.63029275, 1.64517667,
+          1.61659342, 1.59722044, 1.64103121, 1.5408531, 1.68610394, 1.67772755,
+          1.78998563, 1.66621713, 1.65458955, 1.66041308, 1.64710857, 1.68163503,
+          1.74000294, 1.92784786, 1.67411194, 1.67395548, 1.57406532, 1.62199356,
+          1.87618195, 1.5584375, 1.57438785, 1.61711053, 1.63094305, 1.55644029,
+          1.73124302, 1.80666627, 1.6463621, 1.65932006, 1.60816188, 1.75682671,
+          1.64695873, 1.63121722, 1.61380832, 1.60478651, 1.63396035, 1.53505068,
+          1.65534289, 1.67132281, 1.80317197, 1.6767314, 1.65700938, 1.68426259,
+          1.65339716, 1.67540638, 1.73298504, 1.94067348, 1.67893609, 1.70635117,
+          1.5730906, 1.61928553, 1.87148809, 1.56244866, 1.56697152, 1.61584394,
+          1.62759496, 1.55480378, 1.73484107, 1.79055143, 1.64688773, 1.66121492,
+          1.60135887, 1.75254572, 1.64798332, 1.62989921, 1.61381592, 1.60792883,
+          1.63939668, 1.53075757, 1.65371318, 1.66801185, 1.80029087, 1.67591476,
+          1.65655173, 1.68533454,
         ], 1, nil, nil, nil
       )
     case .ernieImage, .flux2, .flux2_9b, .flux2_4b:
@@ -3109,15 +3273,20 @@ public struct ModelZoo: DownloadZoo {
     }
   }
 
+  public static func noiseScalingFactorForModel(_ name: String) -> Float {
+    guard let specification = specificationForModel(name) else { return 1 }
+    return specification.noiseScalingFactor ?? 1
+  }
+
   public static func audioSampleRateForModel(_ name: String) -> Int {
     guard let specification = specificationForModel(name) else {
       return 24_000
     }
     switch specification.version {
     case .v1, .v2, .svdI2v, .ssd1b, .sdxlBase, .sdxlRefiner, .pixart, .auraflow, .kandinsky21,
-      .wurstchenStageC, .wurstchenStageB, .sd3, .sd3Large, .flux1, .hiDreamI1, .zImage,
+      .wurstchenStageC, .wurstchenStageB, .sd3, .sd3Large, .flux1, .hiDreamI1, .hiDreamO1, .zImage,
       .ernieImage, .hunyuanVideo, .wan21_1_3b, .wan21_14b, .qwenImage, .wan22_5b, .flux2, .flux2_9b,
-      .flux2_4b, .cosmos2_5_2b:
+      .flux2_4b, .cosmos2_5_2b, .seedvr2_3b, .seedvr2_7b, .ideogram4:
       return 24_000
     case .ltx2:
       return 24_000
@@ -3175,10 +3344,12 @@ public struct ModelZoo: DownloadZoo {
       return 24
     case .ltx2, .ltx2_3:
       return 25
-    case .v1, .v2, .auraflow, .flux1, .hiDreamI1, .kandinsky21, .pixart, .sd3, .sd3Large, .sdxlBase,
-      .sdxlRefiner, .ssd1b, .svdI2v, .wurstchenStageB, .wurstchenStageC, .zImage, .ernieImage,
+    case .v1, .v2, .auraflow, .flux1, .hiDreamI1, .hiDreamO1, .kandinsky21, .pixart, .sd3,
+      .sd3Large,
+      .sdxlBase, .sdxlRefiner, .ssd1b, .svdI2v, .wurstchenStageB, .wurstchenStageC, .zImage,
+      .ernieImage,
       .flux2, .flux2_9b,
-      .flux2_4b, .cosmos2_5_2b:
+      .flux2_4b, .cosmos2_5_2b, .seedvr2_3b, .seedvr2_7b, .ideogram4:
       return 30
     }
   }
@@ -3202,7 +3373,7 @@ public struct ModelZoo: DownloadZoo {
       case .v1, .v2, .kandinsky21, .sdxlBase, .sdxlRefiner, .ssd1b, .svdI2v, .wurstchenStageC,
         .wurstchenStageB, .sd3, .pixart, .auraflow, .sd3Large, .wan21_1_3b, .wan21_14b, .qwenImage,
         .wan22_5b, .zImage, .ernieImage, .flux2, .flux2_9b, .flux2_4b, .cosmos2_5_2b, .ltx2,
-        .ltx2_3:
+        .ltx2_3, .seedvr2_3b, .seedvr2_7b, .hiDreamO1, .ideogram4:
         return nil
       case .flux1:
         return (4.98651651e+02, -2.83781631e+02, 5.58554382e+01, -3.82021401e+00, 2.64230861e-01)
@@ -3284,6 +3455,8 @@ public struct ModelZoo: DownloadZoo {
         return fileSize < 3 * 1_024 * 1_024 * 1_024
       case .hiDreamI1:
         return fileSize < 13 * 1_024 * 1_024 * 1_024 + 512 * 1_024 * 1_024
+      case .hiDreamO1:
+        return false
       case .zImage:
         return fileSize < 5 * 1_024 * 1_024 * 1_024
       case .ernieImage:
@@ -3296,6 +3469,12 @@ public struct ModelZoo: DownloadZoo {
         return fileSize < 4 * 1_024 * 1_024 * 1_024
       case .ltx2, .ltx2_3:
         return fileSize < 20 * 1_024 * 1_024 * 1_024
+      case .seedvr2_3b:
+        return fileSize < 5 * 1_024 * 1_024 * 1_024
+      case .seedvr2_7b:
+        return fileSize < 8 * 1_024 * 1_024 * 1_024
+      case .ideogram4:
+        return fileSize < 9 * 1_024 * 1_024 * 1_024
       }
     }
     return false
@@ -3348,6 +3527,8 @@ public struct ModelZoo: DownloadZoo {
         return fileSize < 3 * 1_024 * 1_024 * 1_024
       case .hiDreamI1:
         return fileSize < 17 * 1_024 * 1_024 * 1_024
+      case .hiDreamO1:
+        return false
       case .zImage:
         return fileSize < 8 * 1_024 * 1_024 * 1_024
       case .ernieImage:
@@ -3360,6 +3541,12 @@ public struct ModelZoo: DownloadZoo {
         return fileSize < 7 * 1_024 * 1_024 * 1_024
       case .ltx2, .ltx2_3:
         return fileSize < 20 * 1_024 * 1_024 * 1_024
+      case .seedvr2_3b:
+        return fileSize < 5 * 1_024 * 1_024 * 1_024
+      case .seedvr2_7b:
+        return fileSize < 8 * 1_024 * 1_024 * 1_024
+      case .ideogram4:
+        return fileSize < 16 * 1_024 * 1_024 * 1_024
       }
     }
     return false
@@ -3476,7 +3663,8 @@ extension ModelZoo {
     guard
       version == .flux1 || version == .sd3 || version == .sd3Large || version == .hiDreamI1
         || version == .qwenImage || version == .zImage || version == .flux2 || version == .flux2_9b
-        || version == .flux2_4b || version == .cosmos2_5_2b
+        || version == .flux2_4b || version == .cosmos2_5_2b || version == .ernieImage
+        || version == .ideogram4
     else { return false }
     if isConsistencyModel {
       return false
@@ -3493,7 +3681,8 @@ extension ModelZoo {
   public static func isCLIPSkipAvailable(_ version: ModelVersion) -> Bool {
     switch version {
     case .pixart, .auraflow, .wan21_14b, .wan21_1_3b, .qwenImage, .svdI2v, .wan22_5b, .zImage,
-      .ernieImage, .flux2, .flux2_9b, .flux2_4b, .cosmos2_5_2b, .ltx2, .ltx2_3:
+      .ernieImage, .flux2, .flux2_9b, .flux2_4b, .cosmos2_5_2b, .ltx2, .ltx2_3, .seedvr2_3b,
+      .seedvr2_7b, .hiDreamO1, .ideogram4:
       return false
     case .sd3, .sd3Large, .sdxlBase, .sdxlRefiner, .v1, .v2, .flux1, .hunyuanVideo, .hiDreamI1,
       .ssd1b, .kandinsky21, .wurstchenStageB, .wurstchenStageC:

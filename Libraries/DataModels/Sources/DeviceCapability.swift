@@ -135,7 +135,7 @@ public struct DeviceCapability {
     #elseif arch(i386) || arch(x86_64)
       return false
     #else
-    if #available(iOS 26.2, macOS 26.2, macCatalyst 26.2, *) {
+      if #available(iOS 26.2, macOS 26.2, macCatalyst 26.2, *) {
         if let device = MTLCreateSystemDefaultDevice(), device.supportsFamily(.apple10) {
           return true
         }
@@ -188,7 +188,9 @@ public struct DeviceCapability {
       return false
     #else
       if #available(iOS 26, macOS 26, macCatalyst 26, *) {
-        if let device = MTLCreateSystemDefaultDevice(), device.supportsFamily(.apple9) && !device.supportsFamily(.apple10) {
+        if let device = MTLCreateSystemDefaultDevice(),
+          device.supportsFamily(.apple9) && !device.supportsFamily(.apple10)
+        {
           return true
         }
         return false
@@ -274,6 +276,22 @@ public struct DeviceCapability {
     #else
       let physicalMemory = ProcessInfo.processInfo.physicalMemory
       return physicalMemory >= 24_696_061_952  // This is 23 * 1024 * 1024 * 1024.
+    #endif
+  }()
+  public static let shouldConserveMemoryForSmallLLM: Bool = {  // Small here means 20~30B.
+    #if arch(i386) || arch(x86_64) || !canImport(Metal)
+      return true
+    #else
+      if #available(iOS 26, macOS 26, macCatalyst 26, *) {
+        let physicalMemory = ProcessInfo.processInfo.physicalMemory
+        guard physicalMemory >= 50_465_865_728 else {
+          return true
+        }
+        if let device = MTLCreateSystemDefaultDevice(), device.supportsFamily(.apple10) {
+          return false
+        }
+      }
+      return true
     #endif
   }()
   public static var memoryCapacity: MemoryCapacity = {
@@ -666,7 +684,7 @@ public struct DeviceCapability {
       guard (!isUltraPerformance && !(isMaxPerformance && is8BitModel)) || force else {
         return false
       }
-    case .zImage, .ernieImage:
+    case .zImage, .ernieImage, .ideogram4:
       guard (!isUltraPerformance && !(isMaxPerformance && is8BitModel)) || force else {
         return false
       }
@@ -676,7 +694,7 @@ public struct DeviceCapability {
       else {
         return false
       }
-    case .qwenImage:
+    case .qwenImage, .hiDreamO1:
       guard
         (!isUltraPerformance && !(isMaxPerformance && is8BitModel)) || force
       else {
@@ -694,7 +712,7 @@ public struct DeviceCapability {
       else {
         return false
       }
-    case .flux2_4b, .cosmos2_5_2b:
+    case .flux2_4b, .cosmos2_5_2b, .seedvr2_3b, .seedvr2_7b:
       guard
         (!isMaxPerformance && !(isHighPerformance && is8BitModel)) || force
       else {

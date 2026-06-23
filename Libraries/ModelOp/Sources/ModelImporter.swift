@@ -488,13 +488,13 @@ public final class ModelImporter {
         throw Error.noTextEncoder
       case .qwenImage, .cosmos2_5_2b:
         throw Error.noTextEncoder
-      case .hiDreamI1:
+      case .hiDreamI1, .hiDreamO1:
         throw Error.noTextEncoder
       case .zImage:
         throw Error.noTextEncoder
       case .ernieImage, .flux2, .flux2_9b, .flux2_4b:
         throw Error.noTextEncoder
-      case .ltx2, .ltx2_3:
+      case .ltx2, .ltx2_3, .seedvr2_3b, .seedvr2_7b, .ideogram4:
         throw Error.noTextEncoder
       case .kandinsky21:
         fatalError()
@@ -566,9 +566,10 @@ public final class ModelImporter {
             filePath = ModelZoo.filePathForModelDownloaded(
               "\(modelName)_open_clip_vit_bigg14_f16.ckpt")
           case .sd3, .sd3Large, .pixart, .auraflow, .flux1, .kandinsky21, .svdI2v, .wurstchenStageC,
-            .wurstchenStageB, .hunyuanVideo, .wan21_1_3b, .wan21_14b, .hiDreamI1, .qwenImage,
+            .wurstchenStageB, .hunyuanVideo, .wan21_1_3b, .wan21_14b, .hiDreamI1, .hiDreamO1,
+            .qwenImage,
             .cosmos2_5_2b, .wan22_5b, .zImage, .ernieImage, .flux2, .flux2_9b, .flux2_4b, .ltx2,
-            .ltx2_3:
+            .ltx2_3, .seedvr2_3b, .seedvr2_7b, .ideogram4:
             fatalError()
           }
           if modelVersion == .sdxlBase || modelVersion == .sdxlRefiner {
@@ -608,8 +609,9 @@ public final class ModelImporter {
               }
             case .sd3, .sd3Large, .pixart, .auraflow, .flux1, .kandinsky21, .svdI2v,
               .wurstchenStageC, .wurstchenStageB, .hunyuanVideo, .wan21_1_3b, .wan21_14b,
-              .hiDreamI1, .qwenImage, .cosmos2_5_2b, .wan22_5b, .zImage, .ernieImage, .flux2,
-              .flux2_9b, .flux2_4b, .ltx2, .ltx2_3:
+              .hiDreamI1, .hiDreamO1, .qwenImage, .cosmos2_5_2b, .wan22_5b, .zImage, .ernieImage,
+              .flux2,
+              .flux2_9b, .flux2_4b, .ltx2, .ltx2_3, .seedvr2_3b, .seedvr2_7b, .ideogram4:
               fatalError()
             }
           }
@@ -746,6 +748,8 @@ public final class ModelImporter {
     case .hiDreamI1:
       conditionalLength = 4096
       batchSize = 1
+    case .hiDreamO1:
+      fatalError()
     case .qwenImage:
       conditionalLength = 3854
       batchSize = 1
@@ -767,7 +771,7 @@ public final class ModelImporter {
     case .flux2_4b:
       conditionalLength = 7680
       batchSize = 1
-    case .ltx2, .ltx2_3:
+    case .ltx2, .ltx2_3, .seedvr2_3b, .seedvr2_7b, .ideogram4:
       fatalError()
     case .kandinsky21, .wurstchenStageB:
       fatalError()
@@ -819,8 +823,9 @@ public final class ModelImporter {
         case .svdI2v:
           vectors = [graph.variable(.CPU, .WC(batchSize, 768), of: FloatType.self)]
         case .wurstchenStageC, .wurstchenStageB, .pixart, .sd3, .sd3Large, .auraflow, .flux1,
-          .hunyuanVideo, .wan21_1_3b, .wan21_14b, .hiDreamI1, .qwenImage, .cosmos2_5_2b,
-          .wan22_5b, .zImage, .ernieImage, .flux2, .flux2_9b, .flux2_4b, .ltx2, .ltx2_3:
+          .hunyuanVideo, .wan21_1_3b, .wan21_14b, .hiDreamI1, .hiDreamO1, .qwenImage, .cosmos2_5_2b,
+          .wan22_5b, .zImage, .ernieImage, .flux2, .flux2_9b, .flux2_4b, .ltx2, .ltx2_3,
+          .seedvr2_3b, .seedvr2_7b, .ideogram4:
           vectors = []
         case .kandinsky21, .v1, .v2:
           fatalError()
@@ -923,6 +928,8 @@ public final class ModelImporter {
           ).map {
             graph.variable(.CPU, format: .NHWC, shape: $0, of: FloatType.self)
           }
+      case .hiDreamO1:
+        fatalError()
       case .qwenImage:
         cArr =
           [
@@ -1013,7 +1020,7 @@ public final class ModelImporter {
           ).map {
             graph.variable(.CPU, format: .NHWC, shape: $0, of: FloatType.self)
           }
-      case .ltx2, .ltx2_3:
+      case .ltx2, .ltx2_3, .seedvr2_3b, .seedvr2_7b, .ideogram4:
         fatalError()
       case .kandinsky21, .v1, .v2:
         break
@@ -1191,6 +1198,8 @@ public final class ModelImporter {
           usesFlashAttention: .scale1, outputResidual: false, inputResidual: false)
         (unetFixed, unetFixedMapper) = HiDreamFixed(
           timesteps: 1, layers: (16, 32), outputTimesteps: false)
+      case .hiDreamO1:
+        fatalError()
       case .qwenImage:
         (unetMapper, unet) = QwenImage(
           batchSize: 1, height: 64, width: 64, textLength: 128, referenceSequenceLength: 0,
@@ -1215,18 +1224,17 @@ public final class ModelImporter {
         (unet, unetMapper) = ZImage(
           batchSize: 1, height: 64, width: 64, textLength: 32, channels: 3840, layers: 30,
           activationQkScaling: [:], activationProjScaling: [:], activationFfnProjUpScaling: [:],
-          activationFfnScaling: [:], usesFlashAttention: .scale1)
+          activationFfnScaling: [:], usesFlashAttention: .scale1, isBF16: true)
         (unetFixed, unetFixedMapper) = ZImageFixed(
-          batchSize: 1, tokenLength: (0, 32), channels: 3840, layers: 32, activationQkScaling: [:],
+          batchSize: 1, tokenLength: (0, 32), channels: 3840, layers: 30, activationQkScaling: [:],
           activationProjScaling: [:], activationFfnProjUpScaling: [:], activationFfnScaling: [:],
-          usesFlashAttention: .scale1
+          usesFlashAttention: .scale1, isBF16: true
         )
       case .ernieImage:
         (unetMapper, unet) = ErnieImage(
           batchSize: 1, height: 64, width: 64, textLength: 512, layers: 36, channels: 4_096,
           usesFlashAttention: .scale1)
-        (unetFixedMapper, unetFixed) = ErnieImageFixed(
-          tokenLength: 512, timesteps: 1, channels: 4_096)
+        (unetFixedMapper, unetFixed) = ErnieImageFixed(timesteps: 1, channels: 4_096)
       case .cosmos2_5_2b:
         (unetMapper, unet) = Cosmos(
           batchSize: 1, height: 64, width: 64, textLength: 512,
@@ -1234,13 +1242,13 @@ public final class ModelImporter {
         (unetFixedMapper, unetFixed) = CosmosFixed(
           timesteps: 1, batchSize: 1, textLength: 512, usesFlashAttention: .scale1)
         let (adapterMapper, adapter) = AnimaLLMAdapter(
-          batchSize: 2, tokenLength: 16, contextLength: 16, usesFlashAttention: true)
+          targetLength: (16, 16), sourceLength: (16, 16), usesFlashAttention: true)
         let sourceHiddenStates = graph.variable(.CPU, .WC(32, 1024), of: FloatType.self)
         let targetInputIDs = graph.variable(.CPU, format: .NHWC, shape: [32], of: Int32.self)
         let targetRot = graph.variable(
-          Tensor<FloatType>(from: AnimaRotaryPositionEmbedding(sequenceLength: 16)))
+          Tensor<FloatType>(from: AnimaRotaryPositionEmbedding(sequenceLengths: (16, 16))))
         let sourceRot = graph.variable(
-          Tensor<FloatType>(from: AnimaRotaryPositionEmbedding(sequenceLength: 16)))
+          Tensor<FloatType>(from: AnimaRotaryPositionEmbedding(sequenceLengths: (16, 16))))
         adapter.compile(inputs: [sourceHiddenStates, targetInputIDs, targetRot, sourceRot])
         var adapterMapping = ModelWeightMapping()
         for (key, value) in adapterMapper(.generativeModels) {
@@ -1271,7 +1279,7 @@ public final class ModelImporter {
           timesteps: 1,
           channels: 3072, layers: (5, 20), numberOfReferenceImages: 0, guidanceEmbed: true,
           usesFlashAttention: .scale1, kvCache: false)
-      case .ltx2, .ltx2_3:
+      case .ltx2, .ltx2_3, .seedvr2_3b, .seedvr2_7b, .ideogram4:
         fatalError()
       case .kandinsky21, .wurstchenStageB:
         fatalError()
@@ -1363,6 +1371,8 @@ public final class ModelImporter {
             graph.variable(.CPU, .HWC(1, 128, 4096), of: FloatType.self)  // Llama encoder hidden states.
           }
         tEmb = nil
+      case .hiDreamO1:
+        fatalError()
       case .qwenImage:
         crossattn =
           [
@@ -1422,7 +1432,7 @@ public final class ModelImporter {
           graph.variable(.CPU, .WC(1, 256), of: FloatType.self),
         ]
         tEmb = nil
-      case .ltx2, .ltx2_3:
+      case .ltx2, .ltx2_3, .seedvr2_3b, .seedvr2_7b, .ideogram4:
         fatalError()
       case .v1, .v2, .kandinsky21, .wurstchenStageB:
         crossattn = []
@@ -1635,6 +1645,7 @@ public final class ModelImporter {
             modelPrefix = "stage_c"
             modelPrefixFixed = "stage_c_fixed"
           case .pixart, .sd3, .sd3Large, .flux1, .hunyuanVideo, .wan21_14b, .wan21_1_3b, .hiDreamI1,
+            .hiDreamO1,
             .wan22_5b, .qwenImage, .cosmos2_5_2b, .auraflow, .zImage, .ernieImage, .flux2,
             .flux2_9b, .flux2_4b, .ltx2, .ltx2_3:
             let inputs: [DynamicGraph.Tensor<FloatType>] =
@@ -1645,7 +1656,7 @@ public final class ModelImporter {
             UNetMappingFixed = unetFixedMapper(isDiffusersFormat ? .diffusers : .generativeModels)
             modelPrefix = "dit"
             modelPrefixFixed = "dit"
-          case .v1, .v2, .kandinsky21, .wurstchenStageB:
+          case .v1, .v2, .kandinsky21, .wurstchenStageB, .seedvr2_3b, .seedvr2_7b, .ideogram4:
             fatalError()
           }
           func reverseMapping(original: ModelWeightMapping) -> [String: [String]] {
@@ -1949,6 +1960,8 @@ public final class ModelImporter {
           if $0.keys.count != 1857 {
             throw Error.tensorWritesFailed
           }
+        case .hiDreamO1:
+          fatalError()
         case .wan22_5b:
           let count = $0.keys.count
           if count != 986 {
@@ -1986,7 +1999,7 @@ public final class ModelImporter {
           if $0.keys.count != 292 && $0.keys.count != 294 {
             throw Error.tensorWritesFailed
           }
-        case .ltx2, .ltx2_3:
+        case .ltx2, .ltx2_3, .seedvr2_3b, .seedvr2_7b, .ideogram4:
           fatalError()
         case .kandinsky21, .wurstchenStageB:
           fatalError()
@@ -2227,6 +2240,8 @@ extension ModelImporter {
       t5Encoder = fileNames.first {
         $0.hasSuffix("_t5_xxl_encoder_f16.ckpt")
       }
+    case .hiDreamO1:
+      textEncoder = nil
     case .wan22_5b:
       textEncoder = fileNames.first {
         $0.hasSuffix("_umt5_xxl_encoder_f16.ckpt")
@@ -2262,6 +2277,13 @@ extension ModelImporter {
     case .ltx2, .ltx2_3:
       textEncoder = fileNames.first {
         $0.hasSuffix("_gemma_3_12b_it_qat_q8p.ckpt")
+      }
+    case .seedvr2_3b, .seedvr2_7b:
+      textEncoder = nil
+    case .ideogram4:
+      textEncoder = fileNames.first {
+        $0.hasSuffix("_qwen_3_vl_8b_instruct_f16.ckpt")
+          || $0.hasSuffix("_qwen_3_vl_8b_instruct_q8p.ckpt")
       }
     case .wurstchenStageC:
       textEncoder = nil
@@ -2332,6 +2354,13 @@ extension ModelImporter {
             subtitle: ModelZoo.humanReadableNameForVersion(.wurstchenStageC),
             file: "wurstchen_3.0_stage_c_effnet_previewer_f32_f16.ckpt"
           ))
+      }
+    case .ideogram4:
+      if specification.textEncoder == nil {
+        specification.textEncoder = "qwen_3_vl_8b_instruct_q8p.ckpt"
+      }
+      if specification.autoencoder == nil {
+        specification.autoencoder = "flux_2_vae_f16.ckpt"
       }
     case .pixart:
       if specification.textEncoder == nil {
@@ -2441,6 +2470,12 @@ extension ModelImporter {
         .init(sigmaMin: 0, sigmaMax: 1, conditionScale: 1_000))
       // For HiDream, the hires fix trigger scale is 1.5 of the finetune scale.
       specification.hiresFixScale = (finetuneScale * 3 + 1) / 2
+    case .hiDreamO1:
+      specification.objective = .u(conditionScale: 1000)
+      specification.noiseDiscretization = .rf(
+        .init(sigmaMin: 0, sigmaMax: 1, conditionScale: 1_000))
+      specification.noiseScalingFactor = 7.5
+      specification.paddedTextEncodingLength = 1024
     case .qwenImage:
       if specification.textEncoder == nil {
         specification.textEncoder = "qwen_2.5_vl_7b_q8p.ckpt"
@@ -2497,6 +2532,10 @@ extension ModelImporter {
       specification.noiseDiscretization = .rf(
         .init(sigmaMin: 0, sigmaMax: 1, conditionScale: 1_000))
       specification.hiresFixScale = (finetuneScale * 3 + 1) / 2
+      specification.mmdit = ModelZoo.Specification.MMDiT(
+        qkNorm: true, dualAttentionLayers: [], activationQkScaling: [:],
+        activationFfnProjUpScaling: [:])
+      specification.isBf16 = true
     case .ernieImage:
       if specification.textEncoder == nil {
         specification.textEncoder = "ministral_3_3b_q8p.ckpt"
@@ -2559,7 +2598,7 @@ extension ModelImporter {
       }
       // For FLUX.2, the hires fix trigger scale is 2 of the finetune scale.
       specification.hiresFixScale = finetuneScale * 2
-    case .ltx2, .ltx2_3:
+    case .ltx2, .ltx2_3, .seedvr2_3b, .seedvr2_7b:
       fatalError()
     case .kandinsky21, .wurstchenStageB:
       fatalError()

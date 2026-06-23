@@ -12,11 +12,11 @@ let package = Package(
   ],
   dependencies: [
     .package(
-      url: "https://github.com/liuliu/ccv.git", revision: "574b2a5b1734084aa03632dade26920406526b15"
+      url: "https://github.com/liuliu/ccv.git", revision: "48ec1fd002f4da916323fcd8bb79d3e00885dd4f"
     ),
     .package(
       url: "https://github.com/liuliu/s4nnc.git",
-      revision: "51cbf33c876e5c6361356c5885b979ba3fe8ae66"),
+      revision: "594050126b5cee0dd18488dc05a57947df912878"),
     .package(
       url: "https://github.com/liuliu/dflat.git",
       revision: "73925e51e4f44add842177a229f9990cb13711ff"),
@@ -31,6 +31,7 @@ let package = Package(
     .package(url: "https://github.com/apple/swift-crypto.git", from: "3.7.1"),
     .package(url: "https://github.com/apple/swift-atomics.git", from: "1.2.0"),
     .package(url: "https://github.com/apple/swift-docc-plugin", from: "1.4.5"),
+    .package(url: "https://github.com/apple/swift-nio.git", from: "2.100.0"),
     .package(url: "https://github.com/apple/swift-nio-ssl.git", from: "2.23.1"),
     .package(url: "https://github.com/jagreenwood/swift-log-datadog.git", from: "0.3.0"),
 
@@ -99,9 +100,19 @@ let package = Package(
       path: "Libraries/SwiftDiffusion/Sources/Mappings"
     ),
     .target(
+      name: "LLM",
+      dependencies: [
+        "Tokenizer",
+        .product(name: "ccv", package: "ccv"),
+        .product(name: "NNC", package: "s4nnc"),
+      ],
+      path: "Libraries/SwiftLLM/Sources"
+    ),
+    .target(
       name: "Diffusion",
       dependencies: [
         "DiffusionMappings",
+        "LLM",
         "Tokenizer",
         "WeightsCache",
         "ZIPFoundation",
@@ -251,6 +262,7 @@ let package = Package(
       dependencies: [
         "DataModels",
         "Diffusion",
+        "LLM",
         "Upscaler",
         .product(name: "NNC", package: "s4nnc"),
       ],
@@ -444,6 +456,7 @@ let package = Package(
         "Utils",
         .product(name: "ArgumentParser", package: "swift-argument-parser"),
         .product(name: "GRPC", package: "grpc-swift"),
+        .product(name: "NIO", package: "swift-nio"),
         .product(name: "DataDogLog", package: "swift-log-datadog"),
       ],
       path: "Apps/gRPCServerCLI",

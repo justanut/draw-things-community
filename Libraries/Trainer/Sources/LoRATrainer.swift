@@ -117,13 +117,16 @@ public struct LoRATrainer {
           return "sd3_vae_f16.ckpt"
         case .flux1, .hiDreamI1, .zImage:
           return "flux_1_vae_f16.ckpt"
+        case .hiDreamO1:
+          fatalError()
         case .hunyuanVideo:
           return "hunyuan_video_vae_f16.ckpt"
         case .qwenImage:
           return "qwen_image_vae_f16.ckpt"
-        case .ernieImage, .flux2, .flux2_9b, .flux2_4b:
+        case .ernieImage, .flux2, .flux2_9b, .flux2_4b, .ideogram4:
           return "flux_2_vae_f16.ckpt"
-        case .wan21_1_3b, .wan21_14b, .wan22_5b, .ltx2, .ltx2_3, .cosmos2_5_2b:
+        case .wan21_1_3b, .wan21_14b, .wan22_5b, .ltx2, .ltx2_3, .cosmos2_5_2b,
+          .seedvr2_3b, .seedvr2_7b:
           fatalError()
         }
       })()
@@ -152,7 +155,7 @@ public struct LoRATrainer {
         // return "qwen_2.5_vl_7b_f16.ckpt" commented out in case it wont impact production usage.
         case .wan21_1_3b, .wan21_14b, .wan22_5b:
           fatalError()
-        case .hiDreamI1:
+        case .hiDreamI1, .hiDreamO1:
           fatalError()
         case .ernieImage:
           return "ministral_3_3b_f16.ckpt"
@@ -160,7 +163,9 @@ public struct LoRATrainer {
           fatalError()
         case .flux2, .flux2_9b, .flux2_4b:
           fatalError()
-        case .ltx2, .ltx2_3, .cosmos2_5_2b:
+        case .ideogram4:
+          return "qwen_3_vl_8b_instruct_q8p.ckpt"
+        case .ltx2, .ltx2_3, .cosmos2_5_2b, .seedvr2_3b, .seedvr2_7b:
           fatalError()
         }
       })()
@@ -1531,22 +1536,25 @@ public struct LoRATrainer {
             codec: [.q8p, .q6p, .q4p, .ezm7, .jit, .externalData])
         }
         let adapter = AnimaLLMAdapter(
-          batchSize: 1, tokenLength: paddedTargetTextEncodingLength,
-          contextLength: paddedSourceTextEncodingLength, usesFlashAttention: true
+          targetLength: (paddedTargetTextEncodingLength, paddedTargetTextEncodingLength),
+          sourceLength: (paddedSourceTextEncodingLength, paddedSourceTextEncodingLength),
+          usesFlashAttention: true
         ).1
         let sourceHiddenStates = graph.variable(
-          .GPU(0), .WC(paddedSourceTextEncodingLength, 1_024), of: FloatType.self)
+          .GPU(0), .WC(2 * paddedSourceTextEncodingLength, 1_024), of: FloatType.self)
         let targetTokensTensor = graph.variable(
-          .CPU, format: .NHWC, shape: [paddedTargetTextEncodingLength], of: Int32.self)
+          .CPU, format: .NHWC, shape: [2 * paddedTargetTextEncodingLength], of: Int32.self)
         targetTokensTensor.full(0)
         let targetTokensTensorGPU = targetTokensTensor.toGPU(0)
         let targetRotaryTensorGPU = graph.variable(
           Tensor<FloatType>(
-            from: AnimaRotaryPositionEmbedding(sequenceLength: paddedTargetTextEncodingLength)
+            from: AnimaRotaryPositionEmbedding(
+              sequenceLengths: (paddedTargetTextEncodingLength, paddedTargetTextEncodingLength))
           ).toGPU(0))
         let sourceAdapterRotaryTensorGPU = graph.variable(
           Tensor<FloatType>(
-            from: AnimaRotaryPositionEmbedding(sequenceLength: paddedSourceTextEncodingLength)
+            from: AnimaRotaryPositionEmbedding(
+              sequenceLengths: (paddedSourceTextEncodingLength, paddedSourceTextEncodingLength))
           ).toGPU(0))
         adapter.maxConcurrency = .limit(4)
         adapter.compile(
@@ -1574,15 +1582,23 @@ public struct LoRATrainer {
           targetTokensTensor.full(0)
           for i in 0..<min(input.tokens.count, paddedTargetTextEncodingLength) {
             targetTokensTensor[i] = input.tokens[i]
+            targetTokensTensor[i + paddedTargetTextEncodingLength] = input.tokens[i]
           }
           let sourceHiddenStates = textModel(
             inputs: sourceTokensTensor.toGPU(0),
             [sourceRotaryTensorGPU, sourceCausalAttentionMaskGPU]
           )[0].as(of: FloatType.self).reshaped(.WC(paddedSourceTextEncodingLength, 1_024))
+          var packedSourceHiddenStates = graph.variable(
+            .GPU(0), .WC(2 * paddedSourceTextEncodingLength, 1_024), of: FloatType.self)
+          packedSourceHiddenStates[0..<paddedSourceTextEncodingLength, 0..<1_024] =
+            sourceHiddenStates
+          packedSourceHiddenStates[
+            paddedSourceTextEncodingLength..<(2 * paddedSourceTextEncodingLength), 0..<1_024] =
+            sourceHiddenStates
           let context = adapter(
-            inputs: sourceHiddenStates,
+            inputs: packedSourceHiddenStates,
             [targetTokensTensor.toGPU(0), targetRotaryTensorGPU, sourceAdapterRotaryTensorGPU]
-          )[0].as(of: FloatType.self).reshaped(
+          )[0].as(of: FloatType.self)[0..<paddedTargetTextEncodingLength, 0..<1_024].reshaped(
             .HWC(1, paddedTargetTextEncodingLength, 1_024))
           store.write("cond_\(input.imagePath)", tensor: context.rawValue.toCPU())
           guard progressHandler(.conditionalEncoding, index) else {
@@ -1753,9 +1769,10 @@ public struct LoRATrainer {
           ).0
         ]
       case .sd3, .sd3Large, .pixart, .auraflow, .flux1, .kandinsky21, .svdI2v, .wurstchenStageC,
-        .wurstchenStageB, .hunyuanVideo, .wan21_1_3b, .wan21_14b, .hiDreamI1, .qwenImage,
+        .wurstchenStageB, .hunyuanVideo, .wan21_1_3b, .wan21_14b, .hiDreamI1, .hiDreamO1,
+        .qwenImage,
         .cosmos2_5_2b, .wan22_5b, .zImage, .ernieImage, .flux2, .flux2_9b, .flux2_4b, .ltx2,
-        .ltx2_3:
+        .ltx2_3, .seedvr2_3b, .seedvr2_7b, .ideogram4:
         fatalError()
       }
       let tokensTensor = graph.variable(.CPU, format: .NHWC, shape: [77], of: Int32.self)
@@ -1816,8 +1833,9 @@ public struct LoRATrainer {
             }
           case .sd3, .sd3Large, .pixart, .auraflow, .flux1, .kandinsky21, .svdI2v,
             .wurstchenStageC, .wurstchenStageB, .hunyuanVideo, .wan21_1_3b, .wan21_14b, .hiDreamI1,
+            .hiDreamO1,
             .qwenImage, .cosmos2_5_2b, .wan22_5b, .zImage, .ernieImage, .flux2, .flux2_9b,
-            .flux2_4b, .ltx2, .ltx2_3:
+            .flux2_4b, .ltx2, .ltx2_3, .seedvr2_3b, .seedvr2_7b, .ideogram4:
             fatalError()
           }
           return .continue(name)
@@ -2399,6 +2417,7 @@ public struct LoRATrainer {
   private func encodeZImageFixed(
     graph: DynamicGraph,
     externalData: DynamicGraph.Store.Codec,
+    isBF16: Bool,
     tokenLength: Int,
     batch: [(
       textEncoding: Tensor<FloatType>, timestep: Float
@@ -2418,7 +2437,7 @@ public struct LoRATrainer {
         activationProjScaling: activationProjScaling,
         activationFfnProjUpScaling: activationFfnProjUpScaling,
         activationFfnScaling: activationFfnScaling,
-        usesFlashAttention: valueOr(.scale1)
+        usesFlashAttention: valueOr(.scale1), isBF16: isBF16
       ).0
       var timeEmbeds = graph.variable(.GPU(0), .WC(batch.count, 256), of: FloatType.self)
       var textEncodings = graph.variable(
@@ -2495,7 +2514,7 @@ public struct LoRATrainer {
     return graph.withNoGrad {
       let filePath = ModelZoo.filePathForModelDownloaded(model)
       let unetFixed = ErnieImageFixed(
-        tokenLength: tokenLength, timesteps: batch.count, channels: 4_096
+        timesteps: batch.count, channels: 4_096
       ).1
       var timeEmbeds = graph.variable(
         .GPU(0), .HWC(batch.count, 1, 4_096), of: FloatType.self)
@@ -4051,6 +4070,7 @@ public struct LoRATrainer {
     }
     DynamicGraph.setSeed(seed)
     var dataFrame = dataFrame
+    let isBF16 = ModelZoo.isBF16ForModel(model)
     let configuration: LoRANetworkConfiguration
     switch memorySaver {
     case .minimal:
@@ -4088,7 +4108,7 @@ public struct LoRATrainer {
         activationProjScaling: activationProjScaling,
         activationFfnProjUpScaling: activationFfnProjUpScaling,
         activationFfnScaling: activationFfnScaling, usesFlashAttention: .scale1,
-        rotaryEmbeddingHeads: 3_840 / 128, LoRAConfiguration: configuration
+        isBF16: isBF16, rotaryEmbeddingHeads: 3_840 / 128, LoRAConfiguration: configuration
       ).0
     }
     dit.maxConcurrency = .limit(1)
@@ -4284,7 +4304,8 @@ public struct LoRATrainer {
         if batch.count == 32 {
           let batchTokenLength = max(batch.map(\.tokenLength).max() ?? 0, 1)
           let conditions = encodeZImageFixed(
-            graph: graph, externalData: externalData, tokenLength: batchTokenLength,
+            graph: graph, externalData: externalData, isBF16: isBF16,
+            tokenLength: batchTokenLength,
             batch: batch.map { ($0.textEncoding, $0.timestep) })
           for (j, item) in batch.enumerated() {
             guard let tensor = sessionStore.read(item.loadedImagePath) else { continue }
@@ -5309,9 +5330,7 @@ public struct LoRATrainer {
           orthonormalLoRADown: orthonormalLoRADown, powerEMA: powerEMA, memorySaver: memorySaver,
           weightsMemory: weightsMemory, progressHandler: progressHandler)
         return
-      }
-
-      if Self.flux2Configuration(for: version) != nil {
+      } else if Self.flux2Configuration(for: version) != nil {
         trainFlux2(
           graph: graph, firstStage: firstStage, sessionStore: sessionStore,
           resumingLoRAFile: resumingLoRAFile, dataFrame: dataFrame, trainingSteps: trainingSteps,
@@ -5324,9 +5343,7 @@ public struct LoRATrainer {
           orthonormalLoRADown: orthonormalLoRADown, powerEMA: powerEMA, memorySaver: memorySaver,
           weightsMemory: weightsMemory, progressHandler: progressHandler)
         return
-      }
-
-      if version == .qwenImage {
+      } else if version == .qwenImage {
         trainQwen(
           graph: graph, firstStage: firstStage, sessionStore: sessionStore,
           resumingLoRAFile: resumingLoRAFile, zeroCaption: zeroCaption, dataFrame: dataFrame,
@@ -5340,9 +5357,7 @@ public struct LoRATrainer {
           orthonormalLoRADown: orthonormalLoRADown, powerEMA: powerEMA, memorySaver: memorySaver,
           weightsMemory: weightsMemory, progressHandler: progressHandler)
         return
-      }
-
-      if version == .zImage {
+      } else if version == .zImage {
         trainZImage(
           graph: graph, firstStage: firstStage, sessionStore: sessionStore,
           resumingLoRAFile: resumingLoRAFile, dataFrame: dataFrame, zeroCaption: zeroCaption,
@@ -5356,9 +5371,7 @@ public struct LoRATrainer {
           orthonormalLoRADown: orthonormalLoRADown, powerEMA: powerEMA, memorySaver: memorySaver,
           weightsMemory: weightsMemory, progressHandler: progressHandler)
         return
-      }
-
-      if version == .ernieImage {
+      } else if version == .ernieImage {
         trainErnieImage(
           graph: graph, firstStage: firstStage, sessionStore: sessionStore,
           resumingLoRAFile: resumingLoRAFile, dataFrame: dataFrame, zeroCaption: zeroCaption,
@@ -5372,9 +5385,7 @@ public struct LoRATrainer {
           orthonormalLoRADown: orthonormalLoRADown, powerEMA: powerEMA, memorySaver: memorySaver,
           weightsMemory: weightsMemory, progressHandler: progressHandler)
         return
-      }
-
-      if version == .cosmos2_5_2b {
+      } else if version == .cosmos2_5_2b {
         trainCosmos(
           graph: graph, firstStage: firstStage, sessionStore: sessionStore,
           resumingLoRAFile: resumingLoRAFile, dataFrame: dataFrame, zeroCaption: zeroCaption,
@@ -5712,9 +5723,10 @@ public struct LoRATrainer {
         }
         unetLoRAMapping = LoRAMapping.SDUNetXLSSD1B
       case .sd3, .sd3Large, .pixart, .auraflow, .flux1, .kandinsky21, .svdI2v, .wurstchenStageC,
-        .wurstchenStageB, .hunyuanVideo, .wan21_1_3b, .wan21_14b, .hiDreamI1, .qwenImage,
+        .wurstchenStageB, .hunyuanVideo, .wan21_1_3b, .wan21_14b, .hiDreamI1, .hiDreamO1,
+        .qwenImage,
         .cosmos2_5_2b, .wan22_5b, .zImage, .ernieImage, .flux2, .flux2_9b, .flux2_4b, .ltx2,
-        .ltx2_3:
+        .ltx2_3, .seedvr2_3b, .seedvr2_7b, .ideogram4:
         fatalError()
       }
       let externalData: DynamicGraph.Store.Codec =
@@ -5795,8 +5807,9 @@ public struct LoRATrainer {
               }
             case .sd3, .sd3Large, .pixart, .auraflow, .flux1, .kandinsky21, .svdI2v,
               .wurstchenStageC, .wurstchenStageB, .hunyuanVideo, .wan21_1_3b, .wan21_14b,
-              .hiDreamI1, .qwenImage, .cosmos2_5_2b, .wan22_5b, .zImage, .ernieImage, .flux2,
-              .flux2_9b, .flux2_4b, .ltx2, .ltx2_3:
+              .hiDreamI1, .hiDreamO1, .qwenImage, .cosmos2_5_2b, .wan22_5b, .zImage, .ernieImage,
+              .flux2,
+              .flux2_9b, .flux2_4b, .ltx2, .ltx2_3, .seedvr2_3b, .seedvr2_7b, .ideogram4:
               fatalError()
             }
             if name.contains("lora_up") {
@@ -5992,9 +6005,10 @@ public struct LoRATrainer {
       case .sdxlRefiner:
         c = graph.variable(.GPU(0), .WC(1, 2560), of: FloatType.self)
       case .sd3, .sd3Large, .pixart, .auraflow, .flux1, .kandinsky21, .svdI2v, .wurstchenStageC,
-        .wurstchenStageB, .hunyuanVideo, .wan21_1_3b, .wan21_14b, .hiDreamI1, .qwenImage,
+        .wurstchenStageB, .hunyuanVideo, .wan21_1_3b, .wan21_14b, .hiDreamI1, .hiDreamO1,
+        .qwenImage,
         .cosmos2_5_2b, .wan22_5b, .zImage, .ernieImage, .flux2, .flux2_9b, .flux2_4b, .ltx2,
-        .ltx2_3:
+        .ltx2_3, .seedvr2_3b, .seedvr2_7b, .ideogram4:
         fatalError()
       }
       c.full(0)
@@ -6187,7 +6201,8 @@ public struct LoRATrainer {
         let firstStd: Float
         switch version {
         case .v1, .v2, .kandinsky21, .svdI2v, .pixart, .auraflow, .flux1, .hunyuanVideo,
-          .wan21_1_3b, .wan21_14b, .hiDreamI1, .qwenImage, .cosmos2_5_2b, .wan22_5b, .zImage,
+          .wan21_1_3b, .wan21_14b, .hiDreamI1, .hiDreamO1, .qwenImage, .cosmos2_5_2b, .wan22_5b,
+          .zImage,
           .ernieImage, .flux2, .flux2_9b, .flux2_4b, .ltx2, .ltx2_3:
           embeddingName = ("string_to_param", "string_to_param")
           firstStd = 0.02
@@ -6197,6 +6212,8 @@ public struct LoRATrainer {
         case .sdxlRefiner, .wurstchenStageC, .wurstchenStageB:
           embeddingName = ("string_to_param_clip_g", "string_to_param_clip_g")
           firstStd = 0.01
+        case .seedvr2_3b, .seedvr2_7b, .ideogram4:
+          fatalError()
         }
         let embedding0 = graph.variable(
           .GPU(0), .WC(customEmbeddingLength, embeddingSize.0), of: Float.self)
@@ -6474,8 +6491,9 @@ public struct LoRATrainer {
                 injectedEmbeddings.append(injectedEmbedding1)
               case .sd3, .sd3Large, .pixart, .auraflow, .flux1, .kandinsky21, .svdI2v,
                 .wurstchenStageC, .wurstchenStageB, .hunyuanVideo, .wan21_1_3b, .wan21_14b,
-                .hiDreamI1, .qwenImage, .cosmos2_5_2b, .wan22_5b, .zImage, .ernieImage, .flux2,
-                .flux2_9b, .flux2_4b, .ltx2, .ltx2_3:
+                .hiDreamI1, .hiDreamO1, .qwenImage, .cosmos2_5_2b, .wan22_5b, .zImage, .ernieImage,
+                .flux2,
+                .flux2_9b, .flux2_4b, .ltx2, .ltx2_3, .seedvr2_3b, .seedvr2_7b, .ideogram4:
                 fatalError()
               }
               if !hasTrainableEmbeddings {
@@ -6613,8 +6631,9 @@ public struct LoRATrainer {
               }
             case .sd3, .sd3Large, .pixart, .auraflow, .flux1, .kandinsky21, .svdI2v,
               .wurstchenStageC, .wurstchenStageB, .hunyuanVideo, .wan21_1_3b, .wan21_14b,
-              .hiDreamI1, .qwenImage, .cosmos2_5_2b, .wan22_5b, .zImage, .ernieImage, .flux2,
-              .flux2_9b, .flux2_4b, .ltx2, .ltx2_3:
+              .hiDreamI1, .hiDreamO1, .qwenImage, .cosmos2_5_2b, .wan22_5b, .zImage, .ernieImage,
+              .flux2,
+              .flux2_9b, .flux2_4b, .ltx2, .ltx2_3, .seedvr2_3b, .seedvr2_7b, .ideogram4:
               fatalError()
             }
             condTokensTensorGPU = tokensTensorGPU
@@ -6716,8 +6735,9 @@ public struct LoRATrainer {
               }
             case .sd3, .sd3Large, .pixart, .auraflow, .flux1, .kandinsky21, .svdI2v,
               .wurstchenStageC, .wurstchenStageB, .hunyuanVideo, .wan21_1_3b, .wan21_14b,
-              .hiDreamI1, .qwenImage, .cosmos2_5_2b, .wan22_5b, .zImage, .ernieImage, .flux2,
-              .flux2_9b, .flux2_4b, .ltx2, .ltx2_3:
+              .hiDreamI1, .hiDreamO1, .qwenImage, .cosmos2_5_2b, .wan22_5b, .zImage, .ernieImage,
+              .flux2,
+              .flux2_9b, .flux2_4b, .ltx2, .ltx2_3, .seedvr2_3b, .seedvr2_7b, .ideogram4:
               fatalError()
             }
             condTokensTensorGPU = nil

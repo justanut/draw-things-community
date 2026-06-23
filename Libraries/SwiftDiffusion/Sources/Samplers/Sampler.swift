@@ -20,6 +20,7 @@ public enum ModelVersion: String, Codable {
   case wan21_1_3b = "wan_v2.1_1.3b"
   case wan21_14b = "wan_v2.1_14b"
   case hiDreamI1 = "hidream_i1"
+  case hiDreamO1 = "hidream_o1"
   case qwenImage = "qwen_image"
   case wan22_5b = "wan_v2.2_5b"
   case zImage = "z_image"
@@ -28,8 +29,11 @@ public enum ModelVersion: String, Codable {
   case flux2_9b = "flux2_9b"
   case flux2_4b = "flux2_4b"
   case cosmos2_5_2b = "cosmos2.5_2b"
+  case ideogram4 = "ideogram_4"
   case ltx2 = "ltx2"
   case ltx2_3 = "ltx2.3"
+  case seedvr2_3b = "seedvr2_3b"
+  case seedvr2_7b = "seedvr2_7b"
 }
 
 public enum TextEncoderVersion: String, Codable {
@@ -444,12 +448,13 @@ public struct CfgZeroStarConfiguration {
 
 func isBatchEnabled(_ version: ModelVersion) -> Bool {
   switch version {
-  case .auraflow, .flux1, .hiDreamI1, .kandinsky21, .pixart, .sd3, .sd3Large, .sdxlBase,
+  case .auraflow, .flux1, .hiDreamI1, .hiDreamO1, .kandinsky21, .pixart, .sd3, .sd3Large, .sdxlBase,
     .sdxlRefiner, .ssd1b, .v1, .v2, .wurstchenStageB, .wurstchenStageC, .qwenImage, .zImage,
     .ernieImage,
     .flux2, .flux2_9b, .flux2_4b, .cosmos2_5_2b:
     return true
-  case .hunyuanVideo, .svdI2v, .wan21_14b, .wan21_1_3b, .wan22_5b, .ltx2, .ltx2_3:
+  case .hunyuanVideo, .svdI2v, .wan21_14b, .wan21_1_3b, .wan22_5b, .ltx2, .ltx2_3, .seedvr2_3b,
+    .seedvr2_7b, .ideogram4:
     return false
   }
 }
@@ -480,16 +485,16 @@ func applyCfg<FloatType: TensorNumeric & BinaryFloatingPoint>(
           let etCondF32 = DynamicGraph.Tensor<Float>(from: etCond)
           if isBatchEnabled {
             dotProduct = (etUncondF32 .* etCondF32).reduced(
-              .sum, axis: [0, 1, 2, 3])
-            squaredSum =
-              (etUncondF32 .* etUncondF32).reduced(
-                .sum, axis: [0, 1, 2, 3]) + 1e-8
-          } else {
-            dotProduct = (etUncondF32 .* etCondF32).reduced(
               .sum, axis: [1, 2, 3])
             squaredSum =
               (etUncondF32 .* etUncondF32).reduced(.sum, axis: [1, 2, 3])
               + 1e-8
+          } else {
+            dotProduct = (etUncondF32 .* etCondF32).reduced(
+              .sum, axis: [0, 1, 2, 3])
+            squaredSum =
+              (etUncondF32 .* etUncondF32).reduced(
+                .sum, axis: [0, 1, 2, 3]) + 1e-8
           }
           let stStar = dotProduct ./ squaredSum
           etUncond = DynamicGraph.Tensor<FloatType>(from: etUncondF32 .* stStar)
@@ -540,17 +545,18 @@ func applyCfg<FloatType: TensorNumeric & BinaryFloatingPoint>(
         let etUncondF32 = DynamicGraph.Tensor<Float>(from: etUncond)
         let etCondF32 = DynamicGraph.Tensor<Float>(from: etCond)
         if isBatchEnabled {
-          dotProduct = (etUncondF32 .* etCondF32).reduced(
-            .sum, axis: [0, 1, 2, 3])
-          squaredSum =
-            (etUncondF32 .* etUncondF32).reduced(
-              .sum, axis: [0, 1, 2, 3]) + 1e-8
-        } else {
+          // Batch should be independent to the batch dimension.
           dotProduct = (etUncondF32 .* etCondF32).reduced(
             .sum, axis: [1, 2, 3])
           squaredSum =
             (etUncondF32 .* etUncondF32).reduced(.sum, axis: [1, 2, 3])
             + 1e-8
+        } else {
+          dotProduct = (etUncondF32 .* etCondF32).reduced(
+            .sum, axis: [0, 1, 2, 3])
+          squaredSum =
+            (etUncondF32 .* etUncondF32).reduced(
+              .sum, axis: [0, 1, 2, 3]) + 1e-8
         }
         let stStar = dotProduct ./ squaredSum
         etUncond = DynamicGraph.Tensor<FloatType>(from: etUncondF32 .* stStar)

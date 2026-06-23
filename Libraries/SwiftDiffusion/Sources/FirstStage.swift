@@ -59,6 +59,43 @@ private struct TemporalTiledDecodingConfiguration {
 }
 
 extension FirstStage {
+
+  private func hiDreamO1Patchify(_ x: DynamicGraph.Tensor<FloatType>)
+    -> DynamicGraph.Tensor<FloatType>
+  {
+    let shape = x.shape
+    let patchSize = 32
+    let imageChannels = 3
+    let patchDimension = imageChannels * patchSize * patchSize
+    precondition(shape[1] % patchSize == 0)
+    precondition(shape[2] % patchSize == 0)
+    precondition(shape[3] == imageChannels)
+    return x.reshaped(
+      format: .NHWC,
+      shape: [
+        shape[0], shape[1] / patchSize, patchSize, shape[2] / patchSize, patchSize, shape[3],
+      ]
+    ).permuted(0, 1, 3, 5, 2, 4).contiguous().reshaped(
+      .NHWC(shape[0], shape[1] / patchSize, shape[2] / patchSize, patchDimension))
+  }
+
+  private func hiDreamO1Unpatchify(
+    _ x: DynamicGraph.Tensor<FloatType>
+  ) -> DynamicGraph.Tensor<FloatType> {
+    let shape = x.shape
+    let patchSize = 32
+    let imageChannels = 3
+    let patchDimension = imageChannels * patchSize * patchSize
+    precondition(shape[3] == patchDimension)
+    return x.reshaped(
+      format: .NHWC,
+      shape: [
+        shape[0], shape[1], shape[2], imageChannels, patchSize, patchSize,
+      ]
+    ).permuted(0, 1, 4, 2, 5, 3).contiguous().reshaped(
+      .NHWC(shape[0], shape[1] * patchSize, shape[2] * patchSize, imageChannels))
+  }
+
   public func upsample(
     _ x: DynamicGraph.Tensor<FloatType>,
     latentsUpscaler: (filePath: String, mode: LTX2SpatialUpscalerMode)
@@ -106,7 +143,7 @@ extension FirstStage {
     _ x: DynamicGraph.Tensor<FloatType>, decoder existingDecoder: Model?, highPrecision: Bool,
     cancellation: (@escaping () -> Void) -> Void
   )
-    -> (DynamicGraph.Tensor<FloatType>, DynamicGraph.Tensor<Float>?, Model)
+    -> (DynamicGraph.Tensor<FloatType>, DynamicGraph.Tensor<Float>?, Model?)
   {
     let shape = x.shape
     let batchSize = shape[0]
@@ -139,6 +176,7 @@ extension FirstStage {
           latentsStd.map { FloatType($0 / scalingFactor) }, .GPU(0),
           .NHWC(1, 1, 1, latentsStd.count)))
       if version == .ernieImage || version == .flux2 || version == .flux2_9b || version == .flux2_4b
+        || version == .ideogram4
       {
         // FLUX.2 is different, it needs to first reshape x and then apply the scaling.
         let shape = x.shape
@@ -186,10 +224,15 @@ extension FirstStage {
     let scaleFactor: Int
     switch version {
     case .v1, .v2, .sd3, .sd3Large, .pixart, .auraflow, .flux1, .sdxlBase, .sdxlRefiner, .ssd1b,
-      .svdI2v, .kandinsky21, .hiDreamI1, .zImage, .ernieImage, .flux2, .flux2_9b, .flux2_4b:
+      .svdI2v, .kandinsky21, .hiDreamI1, .zImage, .ernieImage, .flux2, .flux2_9b, .flux2_4b,
+      .ideogram4:
       scaleFactor = 8
       scaleFactorZ = 1
-    case .hunyuanVideo, .wan21_1_3b, .wan21_14b, .qwenImage, .cosmos2_5_2b:
+    case .hiDreamO1:
+      scaleFactor = 32
+      scaleFactorZ = 1
+    case .hunyuanVideo, .wan21_1_3b, .wan21_14b, .qwenImage, .cosmos2_5_2b, .seedvr2_3b,
+      .seedvr2_7b:
       scaleFactor = 8
       scaleFactorZ = 4
     case .wan22_5b:
@@ -340,7 +383,10 @@ extension FirstStage {
         outputChannels = 3
       }
       causalAttentionMask = nil
-    case .ernieImage, .flux2, .flux2_9b, .flux2_4b:
+    case .hiDreamO1:
+      // No need to do any model related work.
+      return (hiDreamO1Unpatchify(x), nil, nil)
+    case .ernieImage, .flux2, .flux2_9b, .flux2_4b, .ideogram4:
       let startWidth = tiledDecoding ? decodingTileSize.width : startWidth
       let startHeight = tiledDecoding ? decodingTileSize.height : startHeight
       let decoderUsesFlashAttention =
@@ -826,6 +872,41 @@ extension FirstStage {
       }
       outputChannels = 3
       causalAttentionMask = nil
+    case .seedvr2_3b, .seedvr2_7b:
+      let startDepth = shape[0]
+      let startWidth = tiledDecoding ? decodingTileSize.width : startWidth
+      let startHeight = tiledDecoding ? decodingTileSize.height : startHeight
+      let decoderUsesFlashAttention = usesFlashAttention && (startWidth * startHeight >= 256 * 176)
+      decoder =
+        existingDecoder
+        ?? SeedVR2Decoder3D(
+          startDepth: startDepth, startHeight: startHeight, startWidth: startWidth,
+          usesFlashAttention: decoderUsesFlashAttention)
+      if existingDecoder == nil {
+        decoder.maxConcurrency = .limit(4)
+        if highPrecision {
+          decoder.compile(inputs: DynamicGraph.Tensor<Float>(from: z))
+        } else {
+          decoder.compile(inputs: z)
+        }
+        graph.openStore(
+          filePath, flags: .readOnly, externalStore: TensorData.externalStore(filePath: filePath)
+        ) { store in
+          if startDepth > 1 {
+            store.read("decoder", model: decoder, codec: [.jit, externalData])
+          } else {
+            store.read("decoder", model: decoder, codec: [.jit, externalData]) {
+              name, dataType, _, shape in
+              SeedVR2Conv3DToConv2D(
+                graph: graph, name: name, dataType: dataType, shape: shape, store: store,
+                externalData: externalData, modelPrefix: "decoder", of: FloatType.self)
+                ?? .continue(name)
+            }
+          }
+        }
+      }
+      outputChannels = 3
+      causalAttentionMask = nil
     case .wurstchenStageC, .wurstchenStageB:
       let startWidth = tiledDecoding ? decodingTileSize.width : startWidth
       let startHeight = tiledDecoding ? decodingTileSize.height : startHeight
@@ -983,7 +1064,7 @@ extension FirstStage {
     _ x: DynamicGraph.Tensor<FloatType>, decoder existingDecoder: Model?,
     cancellation: (@escaping () -> Void) -> Void
   )
-    -> (DynamicGraph.Tensor<FloatType>, DynamicGraph.Tensor<Float>?, Model)
+    -> (DynamicGraph.Tensor<FloatType>, DynamicGraph.Tensor<Float>?, Model?)
   {
     let (result, audio, decoder) = decode(
       x, decoder: existingDecoder, highPrecision: false, cancellation: cancellation)
@@ -1001,7 +1082,7 @@ extension FirstStage {
     _ x: DynamicGraph.Tensor<FloatType>, batchSize: (Int, Int), decoder existingDecoder: Model?,
     cancellation: (@escaping () -> Void) -> Void
   )
-    -> (DynamicGraph.Tensor<FloatType>, DynamicGraph.Tensor<Float>?, Model)
+    -> (DynamicGraph.Tensor<FloatType>, DynamicGraph.Tensor<Float>?, Model?)
   {
     let shape = x.shape
     if batchSize.1 == 0 {
@@ -1070,10 +1151,10 @@ extension FirstStage {
     _ x: DynamicGraph.Tensor<FloatType>, encoder: Model?,
     cancellation: (@escaping () -> Void) -> Void
   ) -> (
-    DynamicGraph.Tensor<FloatType>, DynamicGraph.Tensor<FloatType>, Model
+    DynamicGraph.Tensor<FloatType>, DynamicGraph.Tensor<FloatType>, Model?
   ) {
     let (parameters, encoder) = encode(x, encoder: encoder, cancellation: cancellation)
-    guard version != .kandinsky21 && version != .wurstchenStageC else {
+    guard version != .kandinsky21 && version != .wurstchenStageC && version != .hiDreamO1 else {
       return (parameters, parameters, encoder)
     }
     guard version != .wurstchenStageB && version != .ltx2 && version != .ltx2_3 else {
@@ -1089,7 +1170,7 @@ extension FirstStage {
     _ x: DynamicGraph.Tensor<FloatType>, individualFrames: Int, encoder existingEncoder: Model?,
     cancellation: (@escaping () -> Void) -> Void
   ) -> (
-    DynamicGraph.Tensor<FloatType>, DynamicGraph.Tensor<FloatType>, Model
+    DynamicGraph.Tensor<FloatType>, DynamicGraph.Tensor<FloatType>, Model?
   ) {
     if individualFrames == 0 {
       return sample(x, encoder: existingEncoder, cancellation: cancellation)
@@ -1142,6 +1223,7 @@ extension FirstStage {
           latentsStd.map { FloatType(scalingFactor / $0) }, .GPU(0),
           .NHWC(1, 1, 1, latentsStd.count)))
       if version == .ernieImage || version == .flux2 || version == .flux2_9b || version == .flux2_4b
+        || version == .ideogram4
       {
         // FLUX.2 is different, it needs to first reshape x and then apply the scaling.
         let shape = x.shape
@@ -1167,7 +1249,7 @@ extension FirstStage {
     _ x: DynamicGraph.Tensor<FloatType>, encoder existingEncoder: Model?,
     cancellation: (@escaping () -> Void) -> Void
   )
-    -> (DynamicGraph.Tensor<FloatType>, Model)
+    -> (DynamicGraph.Tensor<FloatType>, Model?)
   {
     let (result, encoder) = encode(
       x, encoder: existingEncoder, highPrecision: false, cancellation: cancellation)
@@ -1200,7 +1282,7 @@ extension FirstStage {
     _ x: DynamicGraph.Tensor<FloatType>, encoder existingEncoder: Model?, highPrecision: Bool,
     cancellation: (@escaping () -> Void) -> Void
   )
-    -> (DynamicGraph.Tensor<FloatType>, Model)
+    -> (DynamicGraph.Tensor<FloatType>, Model?)
   {
     var shape = x.shape
     let batchSize = shape[0]
@@ -1225,10 +1307,15 @@ extension FirstStage {
     let scaleFactorZ: Int
     switch version {
     case .v1, .v2, .sd3, .sd3Large, .pixart, .auraflow, .flux1, .sdxlBase, .sdxlRefiner, .ssd1b,
-      .svdI2v, .kandinsky21, .hiDreamI1, .zImage, .ernieImage, .flux2, .flux2_9b, .flux2_4b:
+      .svdI2v, .kandinsky21, .hiDreamI1, .zImage, .ernieImage, .flux2, .flux2_9b, .flux2_4b,
+      .ideogram4:
       scaleFactor = 8
       scaleFactorZ = 1
-    case .hunyuanVideo, .wan21_1_3b, .wan21_14b, .qwenImage, .cosmos2_5_2b:
+    case .hiDreamO1:
+      scaleFactor = 32
+      scaleFactorZ = 1
+    case .hunyuanVideo, .wan21_1_3b, .wan21_14b, .qwenImage, .cosmos2_5_2b, .seedvr2_3b,
+      .seedvr2_7b:
       scaleFactor = 8
       scaleFactorZ = 4
     case .wan22_5b:
@@ -1318,7 +1405,10 @@ extension FirstStage {
       }
       outputChannels = 32
       causalAttentionMask = nil
-    case .ernieImage, .flux2, .flux2_9b, .flux2_4b:
+    case .hiDreamO1:
+      // No need to initialize anything.
+      return (hiDreamO1Patchify(x), nil)
+    case .ernieImage, .flux2, .flux2_9b, .flux2_4b, .ideogram4:
       let startWidth = tiledEncoding ? encodingTileSize.width : startWidth
       let startHeight = tiledEncoding ? encodingTileSize.height : startHeight
       let encoderUsesFlashAttention = usesFlashAttention && startWidth * startHeight >= 256 * 176
@@ -1727,6 +1817,40 @@ extension FirstStage {
       }
       x = (x + 1) * 0.5
       outputChannels = 4
+      causalAttentionMask = nil
+    case .seedvr2_3b, .seedvr2_7b:
+      let startDepth = shape[0]
+      tiledEncoding = false
+      let encoderUsesFlashAttention = usesFlashAttention && (startWidth * startHeight >= 256 * 176)
+      encoder =
+        existingEncoder
+        ?? SeedVR2Encoder3D(
+          startDepth: startDepth, startHeight: shape[1], startWidth: shape[2],
+          usesFlashAttention: encoderUsesFlashAttention)
+      if existingEncoder == nil {
+        encoder.maxConcurrency = .limit(4)
+        if highPrecision {
+          encoder.compile(inputs: DynamicGraph.Tensor<Float>(from: x))
+        } else {
+          encoder.compile(inputs: x)
+        }
+        graph.openStore(
+          filePath, flags: .readOnly, externalStore: TensorData.externalStore(filePath: filePath)
+        ) { store in
+          if startDepth > 1 {
+            store.read("encoder", model: encoder, codec: [.jit, externalData])
+          } else {
+            store.read("encoder", model: encoder, codec: [.jit, externalData]) {
+              name, dataType, _, shape in
+              SeedVR2Conv3DToConv2D(
+                graph: graph, name: name, dataType: dataType, shape: shape, store: store,
+                externalData: externalData, modelPrefix: "encoder", of: FloatType.self)
+                ?? .continue(name)
+            }
+          }
+        }
+      }
+      outputChannels = 32
       causalAttentionMask = nil
     }
     isCancelled.store(false, ordering: .releasing)

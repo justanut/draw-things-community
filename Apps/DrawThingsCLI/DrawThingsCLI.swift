@@ -878,6 +878,14 @@ private enum RecommendedSettingsResolver {
     builder.model = modelSpecification.file
     builder.startWidth = defaultScale
     builder.startHeight = defaultScale
+    if modelSpecification.version == .hiDreamO1 {
+      builder.steps = 28
+      builder.guidanceScale = 1
+      builder.sampler = .dPMPP2MTrailing
+      builder.seedMode = .legacy
+      builder.resolutionDependentShift = true
+      builder.shift = 1
+    }
     return builder.build()
   }
 
@@ -904,8 +912,17 @@ private enum RecommendedSettingsResolver {
         guard let configModel = $0.configuration["model"] as? String, !prefix.isEmpty else {
           return false
         }
-        return configModel.hasPrefix(prefix)
+        return Self.prefix(for: configModel) == prefix
       })
+    if bestMatch == nil {
+      bestMatch = matchWithLoRAs(configurations: configurations, loras) {
+        guard let configModel = $0.configuration["model"] as? String, !prefix.isEmpty else {
+          return false
+        }
+        let configPrefix = Self.prefix(for: configModel)
+        return !configPrefix.isEmpty && prefix.hasPrefix("\(configPrefix)_")
+      }
+    }
     if bestMatch == nil {
       bestMatch = matchWithLoRAs(configurations: configurations, loras) {
         $0.version == version
@@ -930,7 +947,7 @@ private enum RecommendedSettingsResolver {
   }
 
   private static func prefix(for file: String) -> String {
-    let stem = file.components(separatedBy: ".")[0]
+    let stem = (file as NSString).deletingPathExtension
     guard !stem.isEmpty else { return "" }
     var components = stem.components(separatedBy: "_")
     while let last = components.last, ["f16", "svd", "q5p", "q6p", "q8p", "i8x"].contains(last) {
@@ -1420,13 +1437,13 @@ private func defaultImportScale(for version: ModelVersion, artifactFileName: Str
     return 12
   case .wan21_1_3b:
     return 8
-  case .sdxlBase, .sdxlRefiner, .ssd1b, .hiDreamI1, .qwenImage, .zImage, .ernieImage,
+  case .sdxlBase, .sdxlRefiner, .ssd1b, .hiDreamI1, .hiDreamO1, .qwenImage, .zImage, .ernieImage,
     .wurstchenStageC, .wurstchenStageB, .sd3, .sd3Large, .auraflow, .flux1, .flux2, .flux2_9b,
-    .flux2_4b, .cosmos2_5_2b, .ltx2, .ltx2_3:
+    .flux2_4b, .cosmos2_5_2b, .ltx2, .ltx2_3, .ideogram4:
     return 16
   case .pixart:
     return artifactFileName.contains("512") ? 8 : 16
-  case .v1, .v2, .kandinsky21, .svdI2v:
+  case .v1, .v2, .kandinsky21, .svdI2v, .seedvr2_3b, .seedvr2_7b:
     return 8
   }
 }
@@ -1444,8 +1461,9 @@ private func validateCustomTextEncoderSupport(
   case .v1, .v2, .sdxlBase, .ssd1b, .sdxlRefiner, .ernieImage:
     return
   case .kandinsky21, .svdI2v, .wurstchenStageC, .wurstchenStageB, .sd3, .sd3Large, .pixart,
-    .auraflow, .flux1, .hunyuanVideo, .wan21_1_3b, .wan21_14b, .hiDreamI1, .qwenImage,
-    .wan22_5b, .zImage, .flux2, .flux2_9b, .flux2_4b, .cosmos2_5_2b, .ltx2, .ltx2_3:
+    .auraflow, .flux1, .hunyuanVideo, .wan21_1_3b, .wan21_14b, .hiDreamI1, .hiDreamO1, .qwenImage,
+    .wan22_5b, .zImage, .flux2, .flux2_9b, .flux2_4b, .cosmos2_5_2b, .ltx2, .ltx2_3,
+    .seedvr2_3b, .seedvr2_7b, .ideogram4:
     throw ValidationError(
       "Custom text encoder import is not supported for \(ModelZoo.humanReadableNameForVersion(version))."
     )
@@ -1471,8 +1489,9 @@ private func projectedImportedOutputFiles(
     case .ernieImage:
       files.append("\(modelName)_ministral_3_3b_q8p.ckpt")
     case .kandinsky21, .svdI2v, .wurstchenStageC, .wurstchenStageB, .sd3, .sd3Large, .pixart,
-      .auraflow, .flux1, .hunyuanVideo, .wan21_1_3b, .wan21_14b, .hiDreamI1, .qwenImage,
-      .wan22_5b, .zImage, .flux2, .flux2_9b, .flux2_4b, .cosmos2_5_2b, .ltx2, .ltx2_3:
+      .auraflow, .flux1, .hunyuanVideo, .wan21_1_3b, .wan21_14b, .hiDreamI1, .hiDreamO1, .qwenImage,
+      .wan22_5b, .zImage, .flux2, .flux2_9b, .flux2_4b, .cosmos2_5_2b, .ltx2, .ltx2_3,
+      .seedvr2_3b, .seedvr2_7b, .ideogram4:
       break
     }
   }
@@ -1629,7 +1648,9 @@ private func createLocalImageGenerator(queue: DispatchQueue) throws -> (String, 
       "</tool_call>": 151658, "<|fim_prefix|>": 151659, "<|fim_middle|>": 151660,
       "<|fim_suffix|>": 151661, "<|fim_pad|>": 151662, "<|repo_name|>": 151663,
       "<|file_sep|>": 151664, "<tool_response>": 151665, "</tool_response>": 151666,
-      "<think>": 151667, "</think>": 151668,
+      "<think>": 151667, "</think>": 151668, "<|boi_token|>": 151669,
+      "<|bor_token|>": 151670, "<|eor_token|>": 151671, "<|bot_token|>": 151672,
+      "<|tms_token|>": 151673,
     ], unknownToken: "<|endoftext|>", startToken: "<|endoftext|>", endToken: "<|endoftext|>")
   let tokenizerMistral3 = TiktokenTokenizer(
     vocabulary: BinaryResources.vocab_mistral3_json, merges: BinaryResources.merges_mistral3_txt,
@@ -4006,7 +4027,9 @@ private func createLoRATrainerTokenizers() -> LoRATrainerTokenizers {
       "</tool_call>": 151658, "<|fim_prefix|>": 151659, "<|fim_middle|>": 151660,
       "<|fim_suffix|>": 151661, "<|fim_pad|>": 151662, "<|repo_name|>": 151663,
       "<|file_sep|>": 151664, "<tool_response>": 151665, "</tool_response>": 151666,
-      "<think>": 151667, "</think>": 151668,
+      "<think>": 151667, "</think>": 151668, "<|boi_token|>": 151669,
+      "<|bor_token|>": 151670, "<|eor_token|>": 151671, "<|bot_token|>": 151672,
+      "<|tms_token|>": 151673,
     ])
   let tokenizerMistral3 = TiktokenTokenizer(
     vocabulary: BinaryResources.vocab_mistral3_json, merges: BinaryResources.merges_mistral3_txt,

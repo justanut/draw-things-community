@@ -56,9 +56,9 @@ extension UNetFixedEncoder {
     switch version {
     case .sdxlBase, .sdxlRefiner, .ssd1b, .svdI2v, .sd3, .sd3Large, .pixart, .auraflow, .flux1,
       .wurstchenStageC, .wurstchenStageB, .hunyuanVideo, .wan21_1_3b, .wan21_14b, .hiDreamI1,
-      .qwenImage, .wan22_5b, .zImage, .ernieImage, .flux2, .flux2_9b, .flux2_4b, .cosmos2_5_2b,
-      .ltx2,
-      .ltx2_3:
+      .hiDreamO1, .qwenImage, .wan22_5b, .zImage, .ernieImage, .flux2, .flux2_9b, .flux2_4b,
+      .cosmos2_5_2b, .ltx2,
+      .ltx2_3, .seedvr2_3b, .seedvr2_7b, .ideogram4:
       return true
     case .v1, .v2, .kandinsky21:
       return false
@@ -201,8 +201,9 @@ extension UNetFixedEncoder {
       // We don't need other vectors for sampling.
       return []
     case .sd3, .sd3Large, .pixart, .auraflow, .flux1, .hunyuanVideo, .wan21_1_3b, .wan21_14b,
-      .hiDreamI1, .qwenImage, .wan22_5b, .zImage, .ernieImage, .flux2, .flux2_9b, .flux2_4b,
-      .cosmos2_5_2b, .ltx2, .ltx2_3:
+      .hiDreamI1, .hiDreamO1, .qwenImage, .wan22_5b, .zImage, .ernieImage, .flux2, .flux2_9b,
+      .flux2_4b,
+      .cosmos2_5_2b, .ltx2, .ltx2_3, .seedvr2_3b, .seedvr2_7b, .ideogram4:
       return []
     case .v1, .v2, .kandinsky21:
       fatalError()
@@ -248,6 +249,44 @@ extension UNetFixedEncoder {
       externalOnDemand
       ? .externalOnDemand : .externalData(deviceProperties.isFreadPreferred ? .fread : .mmap)
     switch version {
+    case .ideogram4:
+      let c0 = textEncoding[0]
+      let textLength = c0.shape[1]
+      let h = startHeight / 2
+      let w = startWidth / 2
+      let imageLength = h * w
+      var timeEmbeds = graph.variable(.GPU(0), .WC(timesteps.count, 4_608), of: FloatType.self)
+      for (i, timestep) in timesteps.enumerated() {
+        let normalizedTimestep = max(0, 1 - timestep / 1_000)
+        let timeEmbed = graph.variable(
+          Ideogram4TimeEmbedding(timestep: normalizedTimestep, of: FloatType.self).toGPU(0))
+        timeEmbeds[i..<(i + 1), 0..<4_608] = timeEmbed
+      }
+      let indicatorIDs = graph.variable(
+        Ideogram4IndicatorIDs(textLength: textLength, imageLength: imageLength).toGPU(0))
+      let indicatorInput = Input()
+      let indicatorEmbedding = Embedding(
+        FloatType.self, vocabularySize: 2, embeddingSize: 4_608, name: "indicator_embedding")
+      let indicatorEmbedder = Model([indicatorInput], [indicatorEmbedding(indicatorInput)])
+      indicatorEmbedder.compile(inputs: indicatorIDs)
+      graph.openStore(
+        filePath, flags: .readOnly, externalStore: TensorData.externalStore(filePath: filePath)
+      ) { store in
+        guard
+          let tensor = store.read(
+            "indicator_embedding",
+            codec: [.jit, .q6p, .q8p, .ezm7, .i8x, externalData])
+        else {
+          fatalError("Missing Ideogram 4 indicator embedding.")
+        }
+        indicatorEmbedding.parameters.copy(from: Tensor<FloatType>(from: tensor))
+      }
+      let indicator = indicatorEmbedder(inputs: indicatorIDs)[0].as(of: FloatType.self)
+      let rotary = graph.variable(
+        Ideogram4RotaryPositionEmbedding(
+          textLength: textLength, gridHeight: h, gridWidth: w, of: FloatType.self
+        ).toGPU(0))
+      return ([c0, indicator, rotary, timeEmbeds], nil)
     case .sdxlBase, .ssd1b:
       let batchSize = textEncoding[0].shape[0]
       let maxTokenLength = textEncoding[0].shape[1]
@@ -396,6 +435,139 @@ extension UNetFixedEncoder {
       return (kvs, unetFixedWeightMapper)
     case .v1, .v2, .kandinsky21:
       return (textEncoding, nil)
+    case .hiDreamO1:
+      precondition(textEncoding.count == 36 * 2)
+      let selectedTextEncoding: [DynamicGraph.Tensor<FloatType>]
+      if !isCfgEnabled {
+        selectedTextEncoding = textEncoding.map { kv in
+          let shape = kv.shape
+          precondition(shape.count == 4)
+          if shape[0] >= batchSize * 2 {
+            return kv[
+              batchSize..<(batchSize * 2), 0..<shape[1], 0..<shape[2], 0..<shape[3]
+            ].copied()
+          } else if shape[0] >= 2 {
+            return kv[1..<2, 0..<shape[1], 0..<shape[2], 0..<shape[3]].copied()
+          } else {
+            return kv
+          }
+        }
+      } else {
+        selectedTextEncoding = textEncoding
+      }
+      let textKVs: [DynamicGraph.Tensor<FloatType>]
+      if batchSize > 1 {
+        textKVs = selectedTextEncoding.map { kv in
+          let shape = kv.shape
+          precondition(shape.count == 4)
+          guard shape[0] < batchSize * (isCfgEnabled ? 2 : 1) else { return kv }
+          let cBatchSize = batchSize * shape[0]
+          var repeated = graph.variable(
+            kv.kind, .NHWC(cBatchSize, shape[1], shape[2], shape[3]), of: FloatType.self)
+          for i in 0..<batchSize {
+            for j in 0..<shape[0] {
+              repeated[
+                (batchSize * j + i)..<(batchSize * j + i + 1), 0..<shape[1], 0..<shape[2],
+                0..<shape[3]
+              ] = kv[j..<(j + 1), 0..<shape[1], 0..<shape[2], 0..<shape[3]]
+            }
+          }
+          return repeated
+        }
+      } else {
+        textKVs = selectedTextEncoding
+      }
+      let cBatchSize = textKVs[0].shape[0]
+      let textLength = textKVs[0].shape[1]
+      let rotary = graph.variable(
+        HiDreamO1RotaryPositionEmbedding(
+          batchSize: cBatchSize, textLength: textLength, height: startHeight, width: startWidth,
+          of: FloatType.self
+        ).toGPU(0))
+      let dynamicLength = 1 + startHeight * startWidth
+      let rotDynamic = rotary[
+        0..<cBatchSize, textLength..<(textLength + dynamicLength), 0..<1,
+        0..<128
+      ].copied()
+      return ([rotDynamic] + textKVs, nil)
+    case .seedvr2_3b, .seedvr2_7b:
+      let tiledWidth =
+        tiledDiffusion.isEnabled ? min(tiledDiffusion.tileSize.width * 8, startWidth) : startWidth
+      let tiledHeight =
+        tiledDiffusion.isEnabled
+        ? min(tiledDiffusion.tileSize.height * 8, startHeight) : startHeight
+      let configuration: SeedVR2DiTConfiguration = version == .seedvr2_7b ? ._7B : ._3B
+      var inputs: [DynamicGraph.AnyTensor] = [textEncoding[0]]
+      if isCfgEnabled {
+        let rotaryInput = graph.variable(
+          Tensor<FloatType>(
+            from: SeedVR2RotaryPositionEmbedding(
+              configuration: configuration, frames: 1, latentHeight: tiledHeight,
+              latentWidth: tiledWidth,
+              textLength: tokenLengthUncond, shifted: false)
+          ).toGPU(0))
+        let shiftedRotaryInput = graph.variable(
+          Tensor<FloatType>(
+            from: SeedVR2RotaryPositionEmbedding(
+              configuration: configuration, frames: 1, latentHeight: tiledHeight,
+              latentWidth: tiledWidth,
+              textLength: tokenLengthUncond, shifted: true)
+          ).toGPU(0))
+        let windowIndexer = SeedVR2WindowAttentionIndexer(
+          frames: 1, latentHeight: tiledHeight, latentWidth: tiledWidth,
+          textLength: tokenLengthUncond)
+        inputs.append(contentsOf: [
+          rotaryInput, shiftedRotaryInput,
+          graph.variable(windowIndexer.rasterToWindowIndex.toGPU(0)),
+          graph.variable(windowIndexer.windowToShiftedIndex.toGPU(0)),
+          graph.variable(windowIndexer.shiftedToWindowIndex.toGPU(0)),
+          graph.variable(windowIndexer.windowToRasterIndex.toGPU(0)),
+          graph.variable(windowIndexer.shiftedToRasterIndex.toGPU(0)),
+          graph.variable(windowIndexer.regularAttentionIndex.toGPU(0)),
+          graph.variable(windowIndexer.shiftedAttentionIndex.toGPU(0)),
+          graph.variable(windowIndexer.regularAttentionToVideoIndex.toGPU(0)),
+          graph.variable(windowIndexer.shiftedAttentionToVideoIndex.toGPU(0)),
+          graph.variable(windowIndexer.regularAttentionToTextIndex.toGPU(0)),
+          graph.variable(windowIndexer.shiftedAttentionToTextIndex.toGPU(0)),
+          graph.variable(windowIndexer.regularSequenceOffsets.toGPU(0)),
+          graph.variable(windowIndexer.shiftedSequenceOffsets.toGPU(0)),
+        ])
+      }
+      let rotaryInput = graph.variable(
+        Tensor<FloatType>(
+          from: SeedVR2RotaryPositionEmbedding(
+            configuration: configuration, frames: 1, latentHeight: tiledHeight,
+            latentWidth: tiledWidth,
+            textLength: tokenLengthCond, shifted: false)
+        ).toGPU(0))
+      let shiftedRotaryInput = graph.variable(
+        Tensor<FloatType>(
+          from: SeedVR2RotaryPositionEmbedding(
+            configuration: configuration, frames: 1, latentHeight: tiledHeight,
+            latentWidth: tiledWidth,
+            textLength: tokenLengthCond, shifted: true)
+        ).toGPU(0))
+      let windowIndexer = SeedVR2WindowAttentionIndexer(
+        frames: 1, latentHeight: tiledHeight, latentWidth: tiledWidth, textLength: tokenLengthCond)
+      inputs.append(contentsOf: [
+        rotaryInput, shiftedRotaryInput,
+        graph.variable(windowIndexer.rasterToWindowIndex.toGPU(0)),
+        graph.variable(windowIndexer.windowToShiftedIndex.toGPU(0)),
+        graph.variable(windowIndexer.shiftedToWindowIndex.toGPU(0)),
+        graph.variable(windowIndexer.windowToRasterIndex.toGPU(0)),
+        graph.variable(windowIndexer.shiftedToRasterIndex.toGPU(0)),
+        graph.variable(windowIndexer.regularAttentionIndex.toGPU(0)),
+        graph.variable(windowIndexer.shiftedAttentionIndex.toGPU(0)),
+        graph.variable(windowIndexer.regularAttentionToVideoIndex.toGPU(0)),
+        graph.variable(windowIndexer.shiftedAttentionToVideoIndex.toGPU(0)),
+        graph.variable(windowIndexer.regularAttentionToTextIndex.toGPU(0)),
+        graph.variable(windowIndexer.shiftedAttentionToTextIndex.toGPU(0)),
+        graph.variable(windowIndexer.regularSequenceOffsets.toGPU(0)),
+        graph.variable(windowIndexer.shiftedSequenceOffsets.toGPU(0)),
+      ])
+      return (
+        inputs, nil
+      )
     case .pixart:
       let tiledWidth =
         tiledDiffusion.isEnabled ? min(tiledDiffusion.tileSize.width * 8, startWidth) : startWidth
@@ -562,8 +734,8 @@ extension UNetFixedEncoder {
           dualAttentionLayers: [])
       case .v1, .v2, .auraflow, .flux1, .kandinsky21, .pixart, .sdxlBase, .sdxlRefiner, .ssd1b,
         .svdI2v, .wurstchenStageB, .wurstchenStageC, .hunyuanVideo, .wan21_1_3b, .wan21_14b,
-        .hiDreamI1, .qwenImage, .wan22_5b, .zImage, .ernieImage, .flux2, .flux2_9b, .flux2_4b,
-        .cosmos2_5_2b, .ltx2, .ltx2_3:
+        .hiDreamI1, .hiDreamO1, .qwenImage, .wan22_5b, .zImage, .ernieImage, .flux2, .flux2_9b,
+        .flux2_4b, .cosmos2_5_2b, .ltx2, .ltx2_3, .seedvr2_3b, .seedvr2_7b, .ideogram4:
         fatalError()
       }
       var timeEmbeds = graph.variable(
@@ -1614,7 +1786,8 @@ extension UNetFixedEncoder {
             activationProjScaling: activationProjScaling,
             activationFfnProjUpScaling: activationFfnProjUpScaling,
             activationFfnScaling: activationFfnScaling,
-            usesFlashAttention: valueOr(usesFlashAttention, .scale1),
+            usesFlashAttention: valueOr(usesFlashAttention, isBF16 ? .scaleMerged : .scale1),
+            isBF16: isBF16,
             LoRAConfiguration: configuration
           ).0
       } else {
@@ -1626,7 +1799,8 @@ extension UNetFixedEncoder {
             activationProjScaling: activationProjScaling,
             activationFfnProjUpScaling: activationFfnProjUpScaling,
             activationFfnScaling: activationFfnScaling,
-            usesFlashAttention: valueOr(usesFlashAttention, .scale1)
+            usesFlashAttention: valueOr(usesFlashAttention, isBF16 ? .scaleMerged : .scale1),
+            isBF16: isBF16
           ).0
       }
       unetFixed.maxConcurrency = .limit(4)
@@ -1791,12 +1965,24 @@ extension UNetFixedEncoder {
       )
     case .ernieImage:
       let c0 = textEncoding[0]
-      let textLength = c0.shape[1]
       let h = startHeight / 2
       let w = startWidth / 2
       let channels = 4_096
       var timeEmbeds = graph.variable(
         .GPU(0), .HWC(timesteps.count, 1, channels), of: FloatType.self)
+      var c = graph.variable(
+        .GPU(0),
+        .HWC(batchSize, (isCfgEnabled ? tokenLengthUncond : 0) + tokenLengthCond, 3072),
+        of: FloatType.self)
+      if isCfgEnabled {
+        c[0..<batchSize, 0..<tokenLengthUncond, 0..<3072] =
+          c0[0..<batchSize, 0..<tokenLengthUncond, 0..<3072]
+        c[0..<batchSize, tokenLengthUncond..<(tokenLengthCond + tokenLengthUncond), 0..<3072] =
+          c0[batchSize..<(batchSize * 2), 0..<tokenLengthCond, 0..<3072]
+      } else {
+        c[0..<batchSize, 0..<tokenLengthCond, 0..<3072] =
+          c0[0..<batchSize, 0..<tokenLengthCond, 0..<3072]
+      }
       for (i, timestep) in timesteps.enumerated() {
         let timeEmbed = graph.variable(
           Tensor<FloatType>(
@@ -1821,15 +2007,14 @@ extension UNetFixedEncoder {
         configuration.keys = keys
         unetFixed =
           LoRAErnieImageFixed(
-            tokenLength: textLength, timesteps: timesteps.count, channels: channels,
+            timesteps: timesteps.count, channels: channels,
             LoRAConfiguration: configuration
           ).0
       } else {
-        (_, unetFixed) = ErnieImageFixed(
-          tokenLength: textLength, timesteps: timesteps.count, channels: channels)
+        (_, unetFixed) = ErnieImageFixed(timesteps: timesteps.count, channels: channels)
       }
       unetFixed.maxConcurrency = .limit(4)
-      unetFixed.compile(inputs: c0, timeEmbeds)
+      unetFixed.compile(inputs: c, timeEmbeds)
       let loadedFromWeightsCache = weightsCache.detach(
         "\(filePath):[fixed]", to: unetFixed.parameters)
       graph.openStore(
@@ -1876,7 +2061,7 @@ extension UNetFixedEncoder {
             "dit", model: unetFixed, codec: [.jit, .q6p, .q8p, .i8x, .ezm7, externalData])
         }
       }
-      let conditions = unetFixed(inputs: c0, timeEmbeds)
+      let conditions = unetFixed(inputs: c, timeEmbeds)
       if lora.isEmpty {
         weightsCache.attach("\(filePath):[fixed]", from: unetFixed.parameters)
       }
@@ -2221,14 +2406,16 @@ extension UNetFixedEncoder {
           conditions.append(element)
         default:
           let shape = element.shape
-          guard shape[0] > 1 else {
+          guard isCfgEnabled else {
             conditions.append(element)
             break
           }
+          precondition(shape[0] == batchSize * 2)
           let value = DynamicGraph.Tensor<FloatType>(element)
           conditions.append(contentsOf: [
-            value[0..<1, 0..<shape[1], 0..<shape[2], 0..<shape[3]].copied(),
-            value[1..<2, 0..<shape[1], 0..<shape[2], 0..<shape[3]].copied(),
+            value[0..<batchSize, 0..<shape[1], 0..<shape[2], 0..<shape[3]].copied(),
+            value[batchSize..<(batchSize * 2), 0..<shape[1], 0..<shape[2], 0..<shape[3]]
+              .copied(),
           ])
         }
         conditionOrNils[offset] = nil
