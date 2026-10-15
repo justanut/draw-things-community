@@ -4,7 +4,16 @@ import PackageDescription
 
 let package = Package(
   name: "DrawThings",
-  platforms: [.macOS(.v13), .iOS(.v16), .tvOS(.v16), .visionOS(.v1)],
+  // NOTE: macOS 26 is the actual minimum — ccv's NAMatMulKernel uses Apple's
+  // Metal Performance Primitives (mpp::tensor_ops, matmul2d_descriptor) which
+  // require a Metal 4-capable SDK. Building against an older SDK (the
+  // default for `.v13`) links the binary against a 13.0 SDK; the runtime
+  // Metal compiler then defaults to a Metal 3 language version, which does
+  // not define __HAVE_TENSOR__, so every MFA shader compile fails with
+  // "undeclared identifier 'mpp'". Bumping to `.v26` aligns the SDK with
+  // the host runtime so MPP is available. iOS stays at v16 because the
+  // device-side gate in ccv's mfa code is only compiled for macOS anyway.
+  platforms: [.macOS("26.0"), .iOS(.v16), .tvOS(.v16), .visionOS(.v1)],
   products: [
     .executable(name: "gRPCServerCLI", targets: ["gRPCServerCLI"]),
     .executable(name: "draw-things-cli", targets: ["DrawThingsCLI"]),
