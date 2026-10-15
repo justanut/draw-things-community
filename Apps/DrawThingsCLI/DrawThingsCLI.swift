@@ -300,6 +300,20 @@ private enum CLIHelpText {
       \(CLIIdentity.command("models import ./model.safetensors --dry-run"))
     """
 
+  static let modelRegister = """
+    DESCRIPTION:
+      Register a model specification (--config-json) against an already-on-disk
+      checkpoint. Use this when `models import` cannot introspect the artifact
+      (e.g. Draw Things' native SQLite-backed `.ckpt` files). The JSON must
+      decode as a `ModelZoo.Specification`; keys are snake_case.
+
+      Idempotent: registering the same `file` twice updates the existing entry
+      rather than duplicating it.
+
+    EXAMPLES:
+      \(CLIIdentity.command("models register --config-json '{\"name\":\"Qwen Image 2.1 (8-bit S)\",\"file\":\"qwen_image_2.1_i8x.ckpt\",\"prefix\":\"\",\"version\":\"qwen_image_2.1\",\"default_scale\":16,\"text_encoder\":\"qwen_3_vl_8b_instruct_f16.ckpt\",\"autoencoder\":\"qwen_image_2.1_vae_f16.ckpt\"}'"))
+    """
+
   static let train = """
     DESCRIPTION:
       Training commands for local fine-tuning workflows.
@@ -4824,8 +4838,54 @@ extension DrawThingsCLI {
     static let configuration = CommandConfiguration(
       abstract: "Model utilities.",
       discussion: CLIHelpText.models,
-      subcommands: [List.self, Ensure.self, Import.self]
+      subcommands: [List.self, Ensure.self, Import.self, Register.self]
     )
+
+    struct Register: DrawThingsCLICommand {
+      static let configuration = CommandConfiguration(
+        abstract: "Register a local model specification without importing.",
+        discussion: CLIHelpText.modelRegister)
+
+      @OptionGroup var modelsDirectoryOptions: ModelsDirectoryOptions
+
+      @Option(name: .long, help: "Specification JSON to register.")
+      var configJson: String
+
+      @Flag(name: .long, help: "Replace any existing registration for the same file.")
+      var replace: Bool = false
+
+      mutating func run(context: DrawThingsCLIContext) throws {
+        let modelsDirectory = try ModelsDirectoryResolver.resolve(
+          context: context, path: modelsDirectoryOptions.modelsDir)
+        ModelZoo.isExternalUrlsPreferred = true
+        ModelZoo.externalUrls = [modelsDirectory]
+
+        let data = Data(configJson.utf8)
+        let jsonDecoder = JSONDecoder()
+        jsonDecoder.keyDecodingStrategy = .convertFromSnakeCase
+        let specification: ModelZoo.Specification
+        do {
+          specification = try jsonDecoder.decode(ModelZoo.Specification.self, from: data)
+        } catch {
+          throw ValidationError("Invalid specification JSON: \(error)")
+        }
+        guard !specification.file.isEmpty else {
+          throw ValidationError("Specification JSON must include a non-empty 'file' field.")
+        }
+        let filePath = modelsDirectory.appendingPathComponent(specification.file).path
+        if !FileManager.default.fileExists(atPath: filePath) {
+          throw ValidationError(
+            "Model file '\(specification.file)' was not found in \(modelsDirectory.path).")
+        }
+        let existing = ModelZoo.specificationForModel(specification.file)
+        if !replace, existing != nil {
+          context.print("Already registered: \(specification.file) (\(existing!.name))")
+          return
+        }
+        ModelZoo.appendCustomSpecification(specification)
+        context.print("Registered: \(specification.file) (\(specification.name))")
+      }
+    }
 
     struct List: DrawThingsCLICommand {
       static let configuration = CommandConfiguration(
